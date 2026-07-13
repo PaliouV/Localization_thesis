@@ -207,11 +207,14 @@ Since PF core is now off the table (filterpy), the timeline shifts:
 | **3** | 9-10 | Experiments: ATE, RPE, lane accuracy %, urban canyon dropout tests. |
 | **3** | 11-12 | Writing thesis, figures, defense prep. |
 
-### Scope decision
+### Scope decision (revised session 3 — user confirmed: BOTH are required, not staged)
 
-**Option A (lane-only, PRIMARY):** Lane detection + OpenDRIVE matching + PF for lateral correction. Solves "which lane am I in".
+Previously framed as "Option A primary / Option B stretch-if-time-permits." **User corrected this (session 3): the project is meant to deliver the full original plan — both parts are core deliverables, not one optional.**
 
-**Option B (building-based, STRETCH):** Semantic segmentation of building facades + CARLA building bboxes. Solves urban canyon. Only if Option A is rock-solid by end of month 2.
+- **Lane component:** Lane detection + OpenDRIVE matching + PF for lateral correction. Answers "which lane am I in / where exactly in the lane".
+- **Building component:** Semantic segmentation of building facades + CARLA building bboxes, matched against `world.get_environment_objects()`. Addresses urban canyon GPS-denial specifically.
+
+**Timeline risk flagged to user (not yet resolved):** doing both robustly is meaningfully more work than lane-only within the same ~3 month window. Worth explicitly confirming with the supervisor whether both need to be equally polished, or whether one can still be the primary focus with the other at a lighter/prototype level. Not settled as of session 3 — revisit.
 
 ---
 
