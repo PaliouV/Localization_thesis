@@ -2,8 +2,8 @@
 
 **Topic:** Map-based fine-grained localization of an autonomous vehicle in CARLA simulation, using a Particle Filter with camera + IMU + noisy GPS, focused on GPS-denied scenarios (urban canyons, tunnels).
 
-**Last updated:** 13 July 2026 (session 2 — theory + environment verified working)
-**Status:** Environment ready. Theory covered conceptually. Supervisor cleared use of **existing PF library (filterpy)**. Ready to prototype.
+**Last updated:** 13 July 2026 (session 3 — filterpy installed, Labbe Ch.12 in progress, first working CARLA sensor script)
+**Status:** filterpy + deps installed in venv. Labbe Chapter 12 partially read and understood (motivation, Monte Carlo, particle init, N_eff, EKF/UKF context). First hands-on CARLA script built and working: vehicle spawn + calm autopilot (Traffic Manager) + GNSS/IMU sensors with live terminal display. About to add GPS noise simulation.
 
 ---
 
@@ -148,9 +148,13 @@ The user realised (29 Jun) that OSM as known map does NOT work in CARLA (scenes 
 - Python venv `~/carla-env` with `carla` module
 - Native ROS 2 integration in CARLA
 
-### PIP installs (user can do in venv, no sudo needed)
+### DONE (session 3)
 
-Run in his venv:
+- **pip installs done** — `filterpy` and `opencv-python` newly installed; `matplotlib`, `scipy`, `scikit-learn`, `shapely` were already present in the venv.
+- Known side-effect: installing `filterpy` upgraded `numpy` 1.26.4 → 2.2.6, which conflicts with the unrelated `invertedai` package (wants `numpy<2.0.0`). Verified this does NOT break `filterpy` or `carla` imports. `invertedai` isn't used anywhere in this repo (only appears in an unrelated CARLA example script) — safe to ignore.
+
+### PIP installs (reference — already done, see above)
+
 ```bash
 source ~/carla-env/bin/activate
 pip install filterpy matplotlib opencv-python scipy scikit-learn shapely
@@ -211,7 +215,7 @@ Since PF core is now off the table (filterpy), the timeline shifts:
 
 ---
 
-## 10. Theory covered so far (session 2)
+## 10. Theory covered so far (sessions 2-3)
 
 User has been walked through and understands **conceptually**:
 
@@ -225,8 +229,13 @@ User has been walked through and understands **conceptually**:
 - Effective sample size (`N_eff`) and resampling threshold
 - `atan2` and why angles need special averaging (unit-circle vector trick)
 - NumPy vectorized operations mapped to hand-computed Bayes table
+- **(session 3)** Monte Carlo sampling — random-sampling intuition (dart-throwing area estimate → particles as "guesses")
+- **(session 3)** `create_uniform_particles` vs `create_gaussian_particles` — when each is used; ties to GPS-based init (Gaussian around noisy GPS reading, not uniform)
+- **(session 3)** EKF/UKF explained at a conceptual level and contrasted with PF: both assume the belief stays a single Gaussian (unimodal), which fails for ambiguous/multimodal situations (e.g. "which lane") — this is why PF was chosen for the urban-canyon case
 
 He also **wrote and ran** the equivalent of one Bayes update step in Python (4 rooms → 10 positions → 4-particle 1D scenario), producing correct numeric output (`[0.409, 0.409, 0.091, 0.091]`).
+
+**Currently reading:** Labbe Chapter 12, online via nbviewer, at his own pace — stopped partway through (past particle creation code, hasn't reached predict/update/resample code yet).
 
 ### Math still to cover when needed
 
@@ -255,18 +264,20 @@ Cover these **on demand**, tied to specific implementation moments — not upfro
 
 In rough priority:
 
-1. **Install filterpy + friends** in `~/carla-env` (see Section 8, pip install command).
-2. **Ask lab admin for sudo installs** (see Section 8, apt install command).
-3. **Read Labbe Chapter 12** — first section (1D PF with filterpy). ~1 hour.
-4. **Run Labbe's 1D example** locally, modify parameters (N, σ), observe results.
-5. **CARLA OpenDRIVE exploration:** load `Town10HD_Opt.xodr` (already in repo), walk through lane geometry extraction. Small Python script that user writes.
-6. **First integration:** subscribe to `/carla/hero/gnss` in a Python node, feed to filterpy PF, get position estimate.
+1. ~~Install filterpy + friends in `~/carla-env`~~ — DONE (session 3).
+2. **Ask lab admin for sudo installs** (see Section 8, apt install command) — still pending.
+3. **Finish reading Labbe Chapter 12** — user stopped partway through (before predict/update/resample code). Continue from there.
+4. **Add GPS noise simulation** to `spawn_vehicle.py` — was mid-explanation when session 3 ended (blueprint attributes `noise_lat_stddev`/`noise_lon_stddev`/`noise_alt_stddev`, suggested starting value ~0.000045° ≈ 5m via the 111,320 m/degree conversion). User had not yet applied this — pick up here next session.
+5. **Run Labbe's 1D/2D PF example** locally with filterpy, modify parameters (N, σ), observe results.
+6. **CARLA OpenDRIVE exploration:** load `Town10HD_Opt.xodr` (already in repo), walk through lane geometry extraction — ideally via `world.get_map()`/waypoints rather than the old raw-XML `parse_xodr.py` approach (see Section 4 decision). Small Python script that user writes.
+7. **Wire GNSS/IMU into filterpy:** once noise is added, feed live sensor readings from `spawn_vehicle.py` into a first filterpy PF instance, get a position estimate.
 
 ### Things to CONFIRM with the user next session
 
 - Did the supervisor sign off on the OSM → CARLA pivot? (Section 4.)
 - Did the lab admin do the apt installs from Section 8?
-- Did Labbe Chapter 12 make sense? Any concepts still murky?
+- Did Labbe Chapter 12 make sense once he reached predict/update/resample? Any concepts still murky?
+- Did he add the GPS noise attributes himself, or pick up from where session 3 left off?
 
 ### Rules for mentor-mode (repeated for clarity)
 
@@ -283,11 +294,12 @@ GOOD PATTERNS from session 2: small step → check understanding → next step. 
 
 ## 13. Files currently in repo
 
-**Note:** the user said these were AI-generated in a previous attempt. They should be regarded as scratch/reference, not final code — will be rewritten as he goes.
+**Note:** most of these were AI-generated in a previous attempt and should be regarded as scratch/reference, not final code. Exception: `spawn_vehicle.py` has since been debugged and extended by the user himself, incrementally, with mentoring (session 3) — it is no longer just an AI stub, it's his working code.
 
 - `Town10HD_Opt.xodr` — OpenDRIVE map extracted from CARLA (useful, keep)
-- `parse_xodr.py` — parser stub (AI-generated, review needed)
-- `vehicle_spawn.py`, `spawn_vehicle.py` — spawn scripts (AI-generated)
+- `parse_xodr.py` — parser stub (AI-generated, review needed). Does raw XML parsing of road centerlines; per Section 4's decision, future lane work should prefer live `world.get_map()`/waypoints instead of extending this.
+- `spawn_vehicle.py` — **actively developed by the user, session 3.** Was an 18-line broken AI stub (`world.blueprint_library()` bug — user found and fixed it himself), now a working script: spawns vehicle, enables autopilot via Traffic Manager with calm-driving settings (30% under speed limit, 5m following distance, never ignores lights/signs), attaches GNSS + IMU sensors with `.listen()` callbacks, renders a live 2-line terminal display (throttled to 5Hz, thread-safe via `threading.Lock`, fixed-width signed number formatting), and cleans up all actors on exit via `try/finally`. GPS noise not yet added (next step).
+- `vehicle_spawn.py` — bigger AI-generated reference script (pygame manual driving + multi-camera + GNSS/IMU CSV logging, ~400 lines). Kept as reference only; NOT the basis for `spawn_vehicle.py`'s development — deliberately started small instead (see session 3 summary).
 - `particle_filter.py` — empty stub
 - `sensor_data.csv` — logged sensor data (from previous run)
 - `town10_grid.npy`, `town10_meta.npy`, `town10_occupancy.png` — precomputed occupancy grid
@@ -319,3 +331,31 @@ GOOD PATTERNS from session 2: small step → check understanding → next step. 
 - Reading assignment: Labbe Chapter 12
 
 **Do not repeat mistake from this session:** don't push code before intuition is solid. If he says "I don't understand", stop coding and go back to pen-and-paper.
+
+---
+
+## 15. Session 3 summary (13 July 2026)
+
+**Accomplished:**
+
+- pip installs done (`filterpy`, `opencv-python`; rest already present). Verified `filterpy`/`carla` still import fine despite a `numpy` version bump that conflicts with the unused `invertedai` package (harmless, explained to user).
+- Continued Labbe Chapter 12 reading (online, at his own pace) with interactive Q&A: Monte Carlo sampling intuition, `create_uniform_particles` vs `create_gaussian_particles` (and why GPS-based init should be Gaussian, not uniform), `N_eff` recap, EKF/UKF explained and contrasted with PF (unimodal-Gaussian assumption vs particles' ability to hold multiple hypotheses — ties directly to why PF fits the urban-canyon problem).
+- **First hands-on CARLA scripting session**, built incrementally by the user with mentoring, starting from the small broken `spawn_vehicle.py` stub (not the big AI-generated `vehicle_spawn.py`, deliberately):
+  - User found and fixed the `world.blueprint_library()` → `get_blueprint_library()` bug himself
+  - Added GNSS sensor with a `.listen()` callback — learned the callback/event-driven concept (vs polling)
+  - Added IMU sensor himself, mirroring the GNSS pattern
+  - Iteratively built a live 2-line terminal display: ANSI cursor-movement (`\033[2A`, `\033[K`), a shared `state` dict + `render()`, diagnosed and fixed a "reserved blank lines vs. cursor movement" mismatch bug, diagnosed and fixed a race condition (`threading.Lock`) between the GNSS/IMU background threads, added render throttling (5 Hz) and fixed-width signed number formatting for readability
+  - Ran `/simplify` (4 parallel review agents) on the diff; applied the two fixes worth keeping (dedup the sensor `Transform`, `try/finally` actor cleanup on exit) and explicitly skipped others that would have undone the requested 2-line UI or pulled in unrelated `vehicle_spawn.py` machinery
+  - Enabled autopilot via CARLA's Traffic Manager with calm-driving settings (`vehicle_percentage_speed_difference`, `distance_to_leading_vehicle`, `ignore_lights_percentage`/`ignore_signs_percentage` = 0)
+  - Was mid-explanation of GPS noise simulation (`noise_lat_stddev` etc. on the GNSS blueprint) when the session ended — not yet applied to the file
+- Explained that this chat/session history is local to this machine only; the `.md` file is the portable artifact for continuity across machines/sessions — this update is a direct result of that.
+
+**Session-end state:** `spawn_vehicle.py` is a working, clean, thread-safe sensor-logging script with autopilot. GPS noise is the very next thing to add. Labbe Ch.12 reading not finished — stopped before predict/update/resample code.
+
+**Good patterns confirmed again:** small step → check understanding → next step. Letting the user hit real bugs (missing `print()`, race condition, wrong transform) and diagnosing them together, rather than pre-empting them, worked well and produced strong learning moments. When the user explicitly said "κάνε τις αλλαγές/διορθώσεις," applying the already-explained fix directly was appropriate — the mentor-not-code-writer rule is about not doing his thinking for him, not about refusing to type once he's understood and decided.
+
+**Blockers / pending:**
+
+- apt sudo installs still not done (Section 8)
+- GPS noise not yet added to `spawn_vehicle.py`
+- Labbe Ch.12 unfinished (predict/update/resample sections + the full worked 2D example remain)

@@ -20,6 +20,13 @@ random_spawn = random.choice(spawn_points)
 
 vehicle = world.try_spawn_actor(car, random_spawn)
 
+tm = client.get_trafficmanager()
+vehicle.set_autopilot(True, tm.get_port())
+tm.vehicle_percentage_speed_difference(vehicle, 30)   # 30% πιο αργά από το όριο ταχύτητας
+tm.distance_to_leading_vehicle(vehicle, 5.0)           # μεγαλύτερη απόσταση ασφαλείας
+tm.ignore_lights_percentage(vehicle, 0)                # ποτέ δεν αγνοεί φανάρι
+tm.ignore_signs_percentage(vehicle, 0)                 # ποτέ δεν αγνοεί πινακίδα
+
 
 state = {"gps": "...", "imu": "..."}
 render_lock = threading.Lock()
