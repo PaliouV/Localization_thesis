@@ -19,6 +19,8 @@ spawn_points = world.get_map().get_spawn_points()
 random_spawn = random.choice(spawn_points)
 
 vehicle = world.try_spawn_actor(car, random_spawn)
+if vehicle is None:
+    raise RuntimeError("Could not spawn vehicle - spawn point may be occupied.")
 
 tm = client.get_trafficmanager()
 vehicle.set_autopilot(True, tm.get_port())
@@ -35,11 +37,11 @@ RENDER_INTERVAL = 0.2  # seconds between redraws
 
 def render():
     global last_render_time
-    now = time.time()
-    if now - last_render_time < RENDER_INTERVAL:
-        return
-    last_render_time = now
     with render_lock:
+        now = time.time()
+        if now - last_render_time < RENDER_INTERVAL:
+            return
+        last_render_time = now
         print("\033[2A\033[KGPS: " + state["gps"])
         print("\033[K" + "IMU: " + state["imu"], flush=True)
 
@@ -56,8 +58,13 @@ print()
 
 sensor_transform = carla.Transform(carla.Location(x=1.0, z=2.0))
 gnss_sensor = world.try_spawn_actor(gps, sensor_transform, attach_to=vehicle)
+if gnss_sensor is None:
+    raise RuntimeError("Could not spawn GNSS sensor.")
 gnss_sensor.listen(on_gnss)
+
 imu_sensor = world.try_spawn_actor(imu, sensor_transform, attach_to=vehicle)
+if imu_sensor is None:
+    raise RuntimeError("Could not spawn IMU sensor.")
 imu_sensor.listen(on_imu)
 
 try:

@@ -47,6 +47,7 @@ CAMERA_TYPES = [
 class SensorState:
     def __init__(self):
         self.gps = {"frame": 0, "timestamp": 0.0, "lat": 0.0, "lon": 0.0, "alt": 0.0}
+        self.gps_noisy = {"frame": 0, "timestamp": 0.0, "lat": 0.0, "lon": 0.0, "alt": 0.0}
         self.imu = {
             "frame": 0, "timestamp": 0.0,
             "accel_x": 0.0, "accel_y": 0.0, "accel_z": 0.0,
@@ -56,6 +57,15 @@ class SensorState:
 
     def update_gps(self, event):
         self.gps.update({
+            "frame": event.frame,
+            "timestamp": event.timestamp,
+            "lat": event.latitude,
+            "lon": event.longitude,
+            "alt": event.altitude,
+        })
+
+    def update_gps_noisy(self, event):
+        self.gps_noisy.update({
             "frame": event.frame,
             "timestamp": event.timestamp,
             "lat": event.latitude,
@@ -83,6 +93,7 @@ class CsvLogger:
         self.writer = csv.DictWriter(self.file, fieldnames=[
             "wall_time", "carla_frame",
             "gps_timestamp", "latitude", "longitude", "altitude",
+            "gps_noisy_timestamp", "latitude_noisy", "longitude_noisy", "altitude_noisy",
             "imu_timestamp", "accel_x", "accel_y", "accel_z",
             "gyro_x_deg_s", "gyro_y_deg_s", "gyro_z_deg_s", "compass_deg",
             "speed_kmh", "throttle", "brake", "steer", "reverse", "hand_brake",
@@ -100,6 +111,10 @@ class CsvLogger:
             "latitude": state.gps["lat"],
             "longitude": state.gps["lon"],
             "altitude": state.gps["alt"],
+            "gps_noisy_timestamp": state.gps_noisy["timestamp"],
+            "latitude_noisy": state.gps_noisy["lat"],
+            "longitude_noisy": state.gps_noisy["lon"],
+            "altitude_noisy": state.gps_noisy["alt"],
             "imu_timestamp": state.imu["timestamp"],
             "accel_x": state.imu["accel_x"],
             "accel_y": state.imu["accel_y"],
@@ -149,7 +164,7 @@ class ManualController:
         control.reverse = self.reverse
 
         if keys[K_UP] or keys[K_w]:
-            control.throttle = 1.0
+            control.throttle = 0.4
             control.brake = 0.0
         elif keys[K_DOWN] or keys[K_s]:
             control.throttle = 0.0
@@ -262,8 +277,12 @@ def spawn_vehicle(world, blueprint_id):
     if bp.has_attribute("color"):
         bp.set_attribute("color", random.choice(bp.get_attribute("color").recommended_values))
 
-    spawn_points = list(world.get_map().get_spawn_points())
-    random.shuffle(spawn_points)
+    all_spawn_points = list(world.get_map().get_spawn_points())
+    FIXED_SPAWN_INDEX = 0
+    fixed_point = all_spawn_points[FIXED_SPAWN_INDEX]
+    other_points = all_spawn_points[:FIXED_SPAWN_INDEX] + all_spawn_points[FIXED_SPAWN_INDEX + 1:]
+    random.shuffle(other_points)
+    spawn_points = [fixed_point] + other_points
     for spawn_point in spawn_points:
         vehicle = world.try_spawn_actor(bp, spawn_point)
         if vehicle is not None:
@@ -283,6 +302,17 @@ def attach_gps_imu(world, vehicle, state):
     gps = world.spawn_actor(gps_bp, carla.Transform(carla.Location(x=1.0, z=2.0)), attach_to=vehicle)
     gps.listen(lambda event: state.update_gps(event))
     sensors.append(gps)
+
+    # Δεύτερο GNSS, ίδια θέση, με noise ~5m (lat/lon) / ~8m (alt) — τυπική ακρίβεια
+    # καταναλωτικού GPS (3-10m), βλ. project-thesis-overview.
+    gps_noisy_bp = bp_lib.find("sensor.other.gnss")
+    gps_noisy_bp.set_attribute("noise_lat_stddev", "0.000045")
+    gps_noisy_bp.set_attribute("noise_lon_stddev", "0.000045")
+    gps_noisy_bp.set_attribute("noise_alt_stddev", "8.0")
+    gps_noisy_bp.set_attribute("noise_seed", "42")
+    gps_noisy = world.spawn_actor(gps_noisy_bp, carla.Transform(carla.Location(x=1.0, z=2.0)), attach_to=vehicle)
+    gps_noisy.listen(lambda event: state.update_gps_noisy(event))
+    sensors.append(gps_noisy)
 
     imu_bp = bp_lib.find("sensor.other.imu")
     imu = world.spawn_actor(imu_bp, carla.Transform(carla.Location(x=0.0, z=1.6)), attach_to=vehicle)
@@ -386,7 +416,8 @@ def main():
             draw_text(display, font, [
                 "CLICK WINDOW FIRST | W/S/A/D or arrows | Space handbrake | Q reverse | R respawn | ESC quit",
                 f"Speed: {speed_kmh:6.2f} km/h | throttle={control.throttle:.1f} brake={control.brake:.1f} steer={control.steer:.2f} reverse={control.reverse}",
-                f"GPS: lat={state.gps['lat']:.8f}, lon={state.gps['lon']:.8f}, alt={state.gps['alt']:.2f}",
+                f"GPS clean: lat={state.gps['lat']:.8f}, lon={state.gps['lon']:.8f}, alt={state.gps['alt']:.2f}",
+                f"GPS noisy: lat={state.gps_noisy['lat']:.8f}, lon={state.gps_noisy['lon']:.8f}, alt={state.gps_noisy['alt']:.2f}",
                 f"IMU accel: x={state.imu['accel_x']:.3f}, y={state.imu['accel_y']:.3f}, z={state.imu['accel_z']:.3f} m/s²",
                 f"IMU gyro: x={state.imu['gyro_x']:.3f}, y={state.imu['gyro_y']:.3f}, z={state.imu['gyro_z']:.3f} deg/s | compass={state.imu['compass']:.2f}°",
             ])

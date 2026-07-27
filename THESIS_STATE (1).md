@@ -2,8 +2,8 @@
 
 **Topic:** Map-based fine-grained localization of an autonomous vehicle in CARLA simulation, using a Particle Filter with camera + IMU + noisy GPS, focused on GPS-denied scenarios (urban canyons, tunnels).
 
-**Last updated:** 13 July 2026 (session 3 — filterpy installed, Labbe Ch.12 in progress, first working CARLA sensor script)
-**Status:** filterpy + deps installed in venv. Labbe Chapter 12 partially read and understood (motivation, Monte Carlo, particle init, N_eff, EKF/UKF context). First hands-on CARLA script built and working: vehicle spawn + calm autopilot (Traffic Manager) + GNSS/IMU sensors with live terminal display. About to add GPS noise simulation.
+**Last updated:** 27 July 2026 (session 4 — reviewed spawn_vehicle.py, fixed vehicle_spawn.py throttle/spawn point, added GPS noise simulation)
+**Status:** filterpy + deps installed in venv. Labbe Chapter 12 partially read (still stopped before predict/update/resample). `spawn_vehicle.py` (autopilot script) reviewed — works but has 2 known unfixed issues (see Section 12). `vehicle_spawn.py` (manual-drive reference script) updated: calmer throttle on W, fixed spawn point, and a second noisy-GNSS sensor added alongside the clean one (HUD + CSV both show clean vs noisy side by side).
 
 ---
 
@@ -268,19 +268,27 @@ Cover these **on demand**, tied to specific implementation moments — not upfro
 In rough priority:
 
 1. ~~Install filterpy + friends in `~/carla-env`~~ — DONE (session 3).
-2. **Ask lab admin for sudo installs** (see Section 8, apt install command) — still pending.
+2. ~~Ask lab admin for sudo installs~~ — **DEFERRED (session 4).** Checked what's already installed: `cv-bridge`, `image-transport`, `python3-opencv` are present; `vision-opencv`, `ackermann-msgs`, `derived-object-msgs`, `tf-transformations` are missing. But these are only needed for ROS 2 topic integration (Section 5, item 4), which is NOT on the current critical path — all work so far (`spawn_vehicle.py`, `vehicle_spawn.py`) uses the direct `carla` Python API, no ROS involved. User explicitly decided to defer this until ROS integration is actually needed. Revisit then, not before.
 3. **Finish reading Labbe Chapter 12** — user stopped partway through (before predict/update/resample code). Continue from there.
-4. **Add GPS noise simulation** to `spawn_vehicle.py` — was mid-explanation when session 3 ended (blueprint attributes `noise_lat_stddev`/`noise_lon_stddev`/`noise_alt_stddev`, suggested starting value ~0.000045° ≈ 5m via the 111,320 m/degree conversion). User had not yet applied this — pick up here next session.
-5. **Run Labbe's 1D/2D PF example** locally with filterpy, modify parameters (N, σ), observe results.
-6. **CARLA OpenDRIVE exploration:** load `Town10HD_Opt.xodr` (already in repo), walk through lane geometry extraction — ideally via `world.get_map()`/waypoints rather than the old raw-XML `parse_xodr.py` approach (see Section 4 decision). Small Python script that user writes.
-7. **Wire GNSS/IMU into filterpy:** once noise is added, feed live sensor readings from `spawn_vehicle.py` into a first filterpy PF instance, get a position estimate.
+4. ~~Add GPS noise simulation~~ — DONE (session 4), but only in `vehicle_spawn.py` (manual-drive reference script), not yet in `spawn_vehicle.py` (autopilot script, the one actually being developed) — worth porting over.
+5. ~~Fix 2 known issues in `spawn_vehicle.py`~~ — DONE (session 4): added `None` checks (raise `RuntimeError` with a clear message) after each `try_spawn_actor` call; moved the `render()` throttle check-and-update fully inside `render_lock` so it's atomic across the GNSS/IMU callback threads.
+6. **Run Labbe's 1D/2D PF example** locally with filterpy, modify parameters (N, σ), observe results.
+7. **CARLA OpenDRIVE exploration:** load `Town10HD_Opt.xodr` (already in repo), walk through lane geometry extraction — ideally via `world.get_map()`/waypoints rather than the old raw-XML `parse_xodr.py` approach (see Section 4 decision). Small Python script that user writes.
+8. **Wire GNSS/IMU into filterpy:** feed live sensor readings into a first filterpy PF instance, get a position estimate.
+
+### Things to do at home (no CARLA / lab desktop needed) — added session 4
+
+1. **Finish Labbe Chapter 12** — pick up from where you stopped (before predict/update/resample). Read online via nbviewer: https://github.com/rlabbe/Kalman-and-Bayesian-Filters-in-Python
+2. **Read the urban canyon GPS sources** in `READING_LIST.md` (repo root) — six sources added 27 Jul 2026, on multipath/NLOS and DOP, with concrete error magnitudes (open sky ~3-5m, multipath up to ~30m, NLOS tens-hundreds of meters, severe canyon up to ~60m). Goal: come back able to say what GPS noise level fits a CARLA "urban canyon" test.
+3. **Read through `vehicle_spawn.py`'s still-AI-generated parts** — specifically the `MultiCameraDisplay` class and `CsvLogger` class (Section 13 caveat: these haven't been read line-by-line yet, unlike the rest of the script). No CARLA needed, just reading the code and understanding what each part does — you'll need to be able to explain it in the defense.
+4. *(Optional, only if you have Python available at home)* Try running Labbe's 1D/2D PF example locally with `filterpy`, tweak `N` (particle count) and `σ` (noise), and see how the results change.
 
 ### Things to CONFIRM with the user next session
 
 - Did the supervisor sign off on the OSM → CARLA pivot? (Section 4.)
 - Did the lab admin do the apt installs from Section 8?
 - Did Labbe Chapter 12 make sense once he reached predict/update/resample? Any concepts still murky?
-- Did he add the GPS noise attributes himself, or pick up from where session 3 left off?
+- Does the GPS noise level (~5m lat/lon, ~8m alt) feel realistic once he's watched it run, or does he want it harsher (e.g. to mimic urban canyon)?
 
 ### Rules for mentor-mode (repeated for clarity)
 
@@ -297,14 +305,17 @@ GOOD PATTERNS from session 2: small step → check understanding → next step. 
 
 ## 13. Files currently in repo
 
-**Note:** most of these were AI-generated in a previous attempt and should be regarded as scratch/reference, not final code. Exception: `spawn_vehicle.py` has since been debugged and extended by the user himself, incrementally, with mentoring (session 3) — it is no longer just an AI stub, it's his working code.
+**Note:** most of these were AI-generated in a previous attempt and should be regarded as scratch/reference, not final code. Exception: `spawn_vehicle.py` had been debugged and extended by the user himself, incrementally, with mentoring (session 3) — it was no longer just an AI stub, it was his working code.
+
+**REVERSED session 4:** the user decided to make `vehicle_spawn.py` the primary script going forward and set `spawn_vehicle.py` aside ("το ξεχνάμε το άλλο"). Reasoning discussed: `vehicle_spawn.py` is functionally more complete (manual control, multi-camera, dual clean/noisy GPS, CSV logging), and its fixed-spawn-point + GPS-noise features were already added this session. **Caveat flagged to user (not yet acted on):** several classes in `vehicle_spawn.py` (e.g. the multi-camera display, CSV logger) are still AI-generated and not yet read/understood line-by-line by the user the way `spawn_vehicle.py` was — worth walking through before building much further, since he needs to be able to defend every part of the codebase he ships.
 
 - `Town10HD_Opt.xodr` — OpenDRIVE map extracted from CARLA (useful, keep)
 - `parse_xodr.py` — parser stub (AI-generated, review needed). Does raw XML parsing of road centerlines; per Section 4's decision, future lane work should prefer live `world.get_map()`/waypoints instead of extending this.
-- `spawn_vehicle.py` — **actively developed by the user, session 3.** Was an 18-line broken AI stub (`world.blueprint_library()` bug — user found and fixed it himself), now a working script: spawns vehicle, enables autopilot via Traffic Manager with calm-driving settings (30% under speed limit, 5m following distance, never ignores lights/signs), attaches GNSS + IMU sensors with `.listen()` callbacks, renders a live 2-line terminal display (throttled to 5Hz, thread-safe via `threading.Lock`, fixed-width signed number formatting), and cleans up all actors on exit via `try/finally`. GPS noise not yet added (next step).
-- `vehicle_spawn.py` — bigger AI-generated reference script (pygame manual driving + multi-camera + GNSS/IMU CSV logging, ~400 lines). Kept as reference only; NOT the basis for `spawn_vehicle.py`'s development — deliberately started small instead (see session 3 summary).
+- `spawn_vehicle.py` — **SET ASIDE as of session 4** (see reversal note above). Was actively developed by the user in session 3: fixed the `world.blueprint_library()` bug himself, built a working autopilot + GNSS/IMU + live 2-line terminal display script. **Reviewed and fixed session 4** — the 2 issues found (no `None` check after `try_spawn_actor`, race condition in `render()`'s throttle) were both fixed, but the script itself is no longer the active development target.
+- `vehicle_spawn.py` — **NOW THE PRIMARY SCRIPT as of session 4.** Bigger, originally AI-generated (pygame manual driving + multi-camera + GNSS/IMU CSV logging, ~400 lines) — parts of it (camera display class, CSV logger) are not yet read/understood line-by-line by the user, unlike `spawn_vehicle.py` was. **Updated session 4:** W-key throttle lowered from full (1.0) to a calmer value (user changed it himself); `spawn_vehicle()` now tries a fixed spawn point (index 0) first instead of a full random shuffle, falling back to a random other point only if occupied; a second GNSS sensor was added with noise attributes (`noise_lat_stddev`/`noise_lon_stddev` = 0.000045° ≈ 5m, `noise_alt_stddev` = 8m, `noise_seed` = 42) alongside the original clean one — both shown in the HUD (`GPS clean` / `GPS noisy`) and logged as separate columns in the CSV.
 - `particle_filter.py` — empty stub
 - `sensor_data.csv` — logged sensor data (from previous run)
+- `READING_LIST.md` — **new, session 4.** Running, dated log of articles/sources recommended for the user to read (started with urban canyon GPS error sources). Add new entries at the top with the date whenever a new source is suggested.
 - `town10_grid.npy`, `town10_meta.npy`, `town10_occupancy.png` — precomputed occupancy grid
 
 ---
@@ -361,4 +372,26 @@ GOOD PATTERNS from session 2: small step → check understanding → next step. 
 
 - apt sudo installs still not done (Section 8)
 - GPS noise not yet added to `spawn_vehicle.py`
+- Labbe Ch.12 unfinished (predict/update/resample sections + the full worked 2D example remain)
+
+---
+
+## 16. Session 4 summary (27 July 2026)
+
+**Accomplished:**
+
+- Reviewed `spawn_vehicle.py` (the autopilot script) at the user's request. Found and explained 2 issues, not yet fixed: (1) no `None` check after `try_spawn_actor` for vehicle/GNSS/IMU — will crash with `AttributeError` if a spawn point is occupied; (2) race condition in `render()`'s throttle check (`now - last_render_time < RENDER_INTERVAL` is checked before the lock is acquired, so both sensor callback threads can pass it before either updates the timestamp). Also noted an unused `cv2` import.
+- User changed the manual-drive throttle himself in `vehicle_spawn.py` (`control.throttle = 1.0` on `K_w` was too aggressive) — a small, self-directed fix, no code written for him.
+- Fixed spawn point in `vehicle_spawn.py`: walked through why a GPS lat/lon coordinate can't be used directly as a CARLA spawn `Location` (CARLA's local x/y/z vs. WGS84 degrees — the map's own geo-reference converts one to the other, only in the x/y/z → lat/lon direction via `transform_to_geolocation`). User asked for simpler alternatives twice; landed on: pick a fixed index (`0`) from `get_spawn_points()`, try it first, fall back to a random other point only if occupied.
+- Added GPS noise to `vehicle_spawn.py`: a second `sensor.other.gnss` actor at the same mount point as the clean one, with `noise_lat_stddev`/`noise_lon_stddev` set to `0.000045` (≈5m, using the ~111,320 m/degree conversion) and `noise_alt_stddev` set to `8.0` (≈8m) — chosen as the midpoint of the supervisor's stated 3-10m consumer-GPS baseline. Both clean and noisy readings now show side by side in the HUD and are logged as separate CSV columns (`latitude`/`latitude_noisy` etc.).
+- Recapped full project status for the user (this section's parent update).
+
+**Session-end state:** `vehicle_spawn.py` has a working fixed spawn point and dual clean/noisy GPS. `spawn_vehicle.py` (the actively-developed script) still has the 2 open issues above and does not yet have GPS noise — porting the noise setup there, and fixing the 2 issues, are natural next steps.
+
+**Good patterns confirmed again:** user pushed back twice on an over-engineered solution ("δεν υπαρχει πιο απλος τροπος?") before landing on the simple fixed-spawn-point approach — worth defaulting to the simplest working option first next time, rather than the more "correct"/general one, unless he asks for precision.
+
+**Blockers / pending:**
+
+- apt sudo installs still not done (Section 8)
+- GPS noise only in `vehicle_spawn.py`, not yet ported to `spawn_vehicle.py`
 - Labbe Ch.12 unfinished (predict/update/resample sections + the full worked 2D example remain)
