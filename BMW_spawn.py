@@ -2,6 +2,8 @@ import time
 import random
 import threading
 import carla
+import csv
+import math
 import numpy as np
 import cv2 as cv2
 
@@ -47,10 +49,14 @@ def render():
 
 def on_gnss(event):
     state["gps"] = f"lat={event.latitude:+.6f}, lon={event.longitude:+.6f}"
+    state["gps_raw"] = (event.latitude, event.longitude, event.altitude)
+
     render()
 
 def on_imu(event):
     state["imu"] = f"accel=({event.accelerometer.x:+6.2f}, {event.accelerometer.y:+6.2f}, {event.accelerometer.z:+6.2f})"
+    state["imu_raw"] = (event.accelerometer.x, event.accelerometer.y, event.accelerometer.z, event.gyroscope.x, event.gyroscope.y, event.gyroscope.z, event.compass)
+
     render()
 
 print()
@@ -67,12 +73,29 @@ if imu_sensor is None:
     raise RuntimeError("Could not spawn IMU sensor.")
 imu_sensor.listen(on_imu)
 
+csv_name = time.strftime("drive_%Y-%m-%d_%H-%M-%S.csv")   # π.χ. drive_2026-09-24_18-05-12.csv
+csv_file = open(csv_name, "w", newline="")
+writer = csv.writer (csv_file)
+writer.writerow(["sim_time", "gt_x", "gt_y", "gt_yaw", "vel", "gps_lat", "gps_lon", "gps_alt", "acc_x",
+                 "acc_y", "acc_z", "gyro_x", "gyro_y", "gyro_z", "compass"])
+
 try:
     while True:
+        sim_time = world.get_snapshot().timestamp.elapsed_seconds
+        t = vehicle.get_transform()
+        v = vehicle.get_velocity()
+        speed = math.sqrt(v.x**2 + v.y**2 + v.z**2)
+
+        if "gps_raw" not in state or "imu_raw" not in state:
+            time.sleep(0.1)
+            continue
+        writer.writerow([sim_time, t.location.x, t.location.y, t.rotation.yaw, speed] + list(state["gps_raw"]) + list(state["imu_raw"]))
         time.sleep(0.1)
+
 except KeyboardInterrupt:
     pass
 finally:
+    csv_file.close()
     gnss_sensor.destroy()
     imu_sensor.destroy()
     vehicle.destroy()
