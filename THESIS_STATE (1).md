@@ -513,6 +513,12 @@ GOOD PATTERNS from session 2: small step → check understanding → next step. 
 
 Ο χρήστης αποφάσισε: **ξεχνάμε το `vehicle_spawn.py`, χρησιμοποιούμε μόνο το `spawn_vehicle.py`** (μετονομάστηκε σε **`BMW_spawn.py`** για να ξεχωρίζει) (αντιστρέφει την απόφαση της session 4). Το `spawn_vehicle.py` είναι το δικό του, γραμμένο με καθοδήγηση (autopilot + GNSS + IMU + οθόνη 2 γραμμών). Δεν έχει ακόμα: καταγραφή σε CSV, ground truth, κάμερες. Ό,τι χρειάζεται (CSV, ground truth, κάτοψη, `gps_noise.py`) μπαίνει εκεί.
 
+### Δεδομένα κτηρίων (25 Σεπ)
+
+- **Τώρα:** κουτιά από `world.get_environment_objects(Buildings)` → `export_buildings.py` → `town10_buildings.json`. Αρκούν για τις ζώνες θορύβου.
+- Το `no_rendering_mode.py` **δεν** ζωγραφίζει κτήρια (μόνο δρόμους/λωρίδες/σήματα).
+- **Αργότερα (κτήρια/bearings, ~12/11):** αν τα κουτιά είναι χοντροκομμένα, ακριβή περιγράμματα από κάμερα **instance/semantic segmentation από ψηλά** (+ **depth** για ύψος). Προσοχή στην προοπτική: κάμερα πολύ ψηλά, στενό FOV, πολλές λήψεις σε πλέγμα. Δεν έχει δοκιμαστεί ακόμα.
+
 ### Καθάρισμα repo — στο τέλος (ζητήθηκε 24 Σεπ να μείνει για αργότερα)
 
 1. Το `cache/no_rendering_mode/Town10HD_Opt_*.tga` μπήκε κατά λάθος στο git (commit `f65840c`, 688 KB). Διόρθωση: `git rm -r --cached cache` + `cache/` στο `.gitignore` (το αρχείο μένει στον δίσκο — το χρειάζεται το `no_rendering_mode.py`). Όχι αλλαγή ιστορικού.
