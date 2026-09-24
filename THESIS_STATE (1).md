@@ -2,7 +2,7 @@
 
 **Topic:** Map-based fine-grained localization of an autonomous vehicle in CARLA simulation, using a Particle Filter with camera + IMU + noisy GPS, focused on GPS-denied scenarios (urban canyons, tunnels).
 
-**Last updated:** 27 July 2026 (session 4 — reviewed spawn_vehicle.py, fixed vehicle_spawn.py throttle/spawn point, added GPS noise simulation)
+**Last updated:** 24 August 2026 (session 5 — Windows home machine set up; conceptual walkthrough of the camera observation model; full literature research on urban-canyon GPS error → `GPS_RESEARCH_REPORT.md` + filled `GPS_NOISE_MODEL.md`. See Section 17.)
 **Status:** filterpy + deps installed in venv. Labbe Chapter 12 partially read (still stopped before predict/update/resample). `spawn_vehicle.py` (autopilot script) reviewed — works but has 2 known unfixed issues (see Section 12). `vehicle_spawn.py` (manual-drive reference script) updated: calmer throttle on W, fixed spawn point, and a second noisy-GNSS sensor added alongside the clean one (HUD + CSV both show clean vs noisy side by side).
 
 ---
@@ -135,7 +135,30 @@ The user realised (29 Jun) that OSM as known map does NOT work in CARLA (scenes 
 - **Python venv** at `~/carla-env/` — has the `carla` Python module already installed
 - **CARLA ROS 2 native integration** — verified: `/carla/hero/{gnss, imu, rgb/image, lidar/point_cloud, ...}` topics all publish correctly after running `python3 /opt/carla/PythonAPI/examples/ros2/ros2_native.py --file stack.json`
 
-**Ignore the laptop.** User explicitly said forget it, only desktop.
+**Note on the old "ignore the laptop":** the earlier state said to forget the laptop and use only the lab desktop. That still holds for the *primary* workflow. But as of session 5 the user set up a **secondary home machine (Windows)** for doing CARLA work at home — see below.
+
+### Home machine (Windows) — added session 5 (7 Aug 2026)
+
+Secondary/home setup. **Lab Ubuntu desktop remains the primary environment.** Used for working at home when the lab isn't available.
+
+- **OS:** Windows 11, user `vpaliouras` (has admin / winget available)
+- **Hardware:** laptop — **RTX 3050 Ti Laptop GPU (4 GB VRAM)**, 31 GB RAM. 4 GB VRAM is tight for CARLA but runs at low quality; expect low FPS.
+- **CARLA 0.9.16** at `C:\Users\vpaliouras\Downloads\CARLA_0.9.16` — the simulator is `CarlaUE4.exe` (no Python needed to launch it).
+- **Python gotcha (important):** the machine's default Python is **3.14**, but CARLA's wheel is `cp312` = **Python 3.12 only**. Installed Python 3.12.10 alongside (via `winget install Python.Python.3.12`); both coexist (`py -0p` lists 3.14 default + 3.12).
+- **Python venv** at `C:\Users\vpaliouras\carla-env` (3.12-based, mirrors the Ubuntu `~/carla-env`). Contains: `carla` 0.9.16 (from the local wheel at `...\CARLA_0.9.16\PythonAPI\carla\dist\carla-0.9.16-cp312-cp312-win_amd64.whl`), plus `pygame`, `numpy`, `filterpy`, `matplotlib`, `opencv-python`, `scipy`, `scikit-learn`, `shapely`. Verified `import carla` works.
+- **No ROS 2 on Windows** — not set up, not needed (all current scripts use the direct `carla` Python API).
+
+**How to run CARLA at home (two PowerShell terminals):**
+
+Terminal 1 — start the simulator (leave running):
+```powershell
+C:\Users\vpaliouras\Downloads\CARLA_0.9.16\CarlaUE4.exe
+```
+Terminal 2 — run a client script (simulator must be up first):
+```powershell
+C:\Users\vpaliouras\carla-env\Scripts\python.exe C:\Users\vpaliouras\Localization_thesis\vehicle_spawn.py
+```
+Calling the venv's `python.exe` by full path avoids needing to "activate" the venv (which PowerShell execution policy can block). If CARLA is too heavy on the 4 GB GPU, add flags like `-windowed -ResX=800 -ResY=600` (and `-quality-level=Low` if needed for performance).
 
 ---
 
@@ -315,6 +338,8 @@ GOOD PATTERNS from session 2: small step → check understanding → next step. 
 - `vehicle_spawn.py` — **NOW THE PRIMARY SCRIPT as of session 4.** Bigger, originally AI-generated (pygame manual driving + multi-camera + GNSS/IMU CSV logging, ~400 lines) — parts of it (camera display class, CSV logger) are not yet read/understood line-by-line by the user, unlike `spawn_vehicle.py` was. **Updated session 4:** W-key throttle lowered from full (1.0) to a calmer value (user changed it himself); `spawn_vehicle()` now tries a fixed spawn point (index 0) first instead of a full random shuffle, falling back to a random other point only if occupied; a second GNSS sensor was added with noise attributes (`noise_lat_stddev`/`noise_lon_stddev` = 0.000045° ≈ 5m, `noise_alt_stddev` = 8m, `noise_seed` = 42) alongside the original clean one — both shown in the HUD (`GPS clean` / `GPS noisy`) and logged as separate columns in the CSV.
 - `particle_filter.py` — empty stub
 - `sensor_data.csv` — logged sensor data (from previous run)
+- `GPS_RESEARCH_REPORT.md` — **new, session 5.** Πλήρης βιβλιογραφική αναφορά για το σφάλμα GPS σε urban canyon, γραμμένη από τον assistant κατόπιν ρητού αιτήματος του χρήστη ("διάβασέ τα όλα και δώσε μου αναφορά"). Περιέχει: επαληθευμένους αριθμούς με ακριβή απόδοση, ρητή δήλωση ποιες πηγές ΔΕΝ ήταν προσβάσιμες, τη διάκριση multipath vs NLOS, την επιβεβαίωση της ανισοτροπίας, ανάλυση του πηγαίου κώδικα του CARLA, και προτεινόμενο μοντέλο θορύβου με τεκμηρίωση κάθε παραμέτρου.
+- `GPS_NOISE_MODEL.md` — **new, session 5.** Κενός πίνακας τεκμηρίωσης για το μοντέλο θορύβου GPS: 5 φαινόμενα (χρονική συσχέτιση, μεροληψία, NLOS άλματα, εξάρτηση από κτήρια/ανισοτροπία, dropouts) × παράμετροι, με στήλες «Τιμή» και «Πηγή» προς συμπλήρωση καθώς ο χρήστης διαβάζει τις έξι urban-canyon πηγές. Περιέχει επίσης τις αποφάσεις σχεδιασμού της session 5 (βλ. παρακάτω). **Ο χρήστης δεν το έχει συμπληρώσει ακόμα** — είναι το άμεσο "at home" task.
 - `READING_LIST.md` — **new, session 4.** Running, dated log of articles/sources recommended for the user to read (started with urban canyon GPS error sources). Add new entries at the top with the date whenever a new source is suggested.
 - `town10_grid.npy`, `town10_meta.npy`, `town10_occupancy.png` — precomputed occupancy grid
 
@@ -395,3 +420,91 @@ GOOD PATTERNS from session 2: small step → check understanding → next step. 
 - apt sudo installs still not done (Section 8)
 - GPS noise only in `vehicle_spawn.py`, not yet ported to `spawn_vehicle.py`
 - Labbe Ch.12 unfinished (predict/update/resample sections + the full worked 2D example remain)
+
+---
+
+## 17. Session 5 summary (24 Αυγούστου 2026)
+
+**Accomplished:**
+
+- **Windows home setup (νέο δεύτερο μηχάνημα).** Ο χρήστης δούλευε από το σπίτι σε Windows. Στήθηκε: Python 3.12.10 (το default ήταν 3.14, ασύμβατο με το CARLA wheel `cp312`), venv στο `C:\Users\vpaliouras\carla-env`, `carla` 0.9.16 από το τοπικό wheel + pygame/numpy/filterpy/matplotlib/opencv/scipy/sklearn/shapely. **Επιβεβαιώθηκε από τον χρήστη ότι δουλεύει** (CARLA + `vehicle_spawn.py`). Λεπτομέρειες στο Section 7.
+- **Εννοιολογική συζήτηση — η καρδιά της διπλωματικής.** Ο χρήστης είπε ρητά «έχω μπερδευτεί πάρα πολύ» μετά από τεχνική συζήτηση για κάτοψη χάρτη. Έγινε πλήρες backtrack σε αναλογίες:
+  - Η βασική ιδέα (χάρτης + τι βλέπει η κάμερα → πού πρέπει να στέκομαι), με αναλογία «δεμένα μάτια στη Θεσσαλονίκη».
+  - Γιατί χρειάζονται **και** λωρίδες **και** κτήρια: λωρίδες → εγκάρσια θέση (πλάτος), κτήρια → κατά μήκος (μήκος). Ο χρήστης το απάντησε σωστά μόνος του («γιατί λωρίδες υπάρχουν παντού») ✅
+  - **Η κάμερα δεν μετράει απόσταση, μετράει γωνία (bearing).** Το κόλπο: δεν υπολογίζεις θέση από την εικόνα — κάθε particle **προβλέπει** τι γωνίες θα έβλεπε από τη θέση του βάσει χάρτη, και συγκρίνεται με την πραγματική μέτρηση.
+  - Διορθώθηκε παρανόηση: η σύγκριση είναι πάντα *πρόβλεψη particle ↔ πραγματική μέτρηση κάμερας*, ποτέ particle με particle. Και τα βάρη είναι **μαλακά** (Gaussian likelihood), όχι σκληρό κατώφλι.
+  - Δηλώθηκε ρητά ότι η bearing-only προσέγγιση **δεν είναι πρωτότυπη ιδέα** — είναι κλασικό landmark-based observation model, και ότι το **data association** (ποια γωνία χάρτη αντιστοιχεί σε ποιο κτήριο) παραλείφθηκε σκόπιμα για απλότητα.
+- **Βιβλιογραφική έρευνα κατόπιν ρητού αιτήματος.** Ο χρήστης ζήτησε να διαβαστούν όλες οι πηγές αναλυτικά και να ετοιμαστεί αναφορά, τονίζοντας «θέλω να είναι 100% αλήθεια, μη μου πεις κάτι για να με ικανοποιήσεις». Αποτέλεσμα: `GPS_RESEARCH_REPORT.md` + συμπληρωμένο `GPS_NOISE_MODEL.md`.
+
+**Κύρια ευρήματα της έρευνας (όλα με πηγή στο report):**
+
+- **Urban canyon vs ανοιχτός ουρανός: ~6-10× χειρότερα στον μέσο όρο** (3-5 m → ~31 m), **~35-50× στο χειρότερο** (έως 177.59 m). Πηγή: Wen & Hsu, Χονγκ Κονγκ, u-blox M8T.
+- **Multipath ≠ NLOS** — γνήσιο multipath ~1 m (σ), NLOS δεκάδες μέτρα. Τα νούμερα «multipath» στη βιβλιογραφία είναι συνήθως NLOS (Groves 2011). **Αλλάζει τη δομή του μοντέλου: χρειάζονται δύο μηχανισμοί.**
+- **Η ανισοτροπία ΕΠΙΒΕΒΑΙΩΘΗΚΕ** (είχε σημειωθεί ως «προς επαλήθευση» νωρίτερα στην ίδια session): εγκάρσιο σφάλμα χειρότερο από κατά μήκος, ADOP < CDOP. **Νέα λεπτομέρεια:** εξαρτάται από τον προσανατολισμό του δρόμου — «ελαφρώς» χειρότερο σε δρόμους Β-Ν, «ουσιωδώς» σε Α-Δ.
+- **Groves 2011 περιέχει την πρόταση που δικαιολογεί τη διπλωματική:** για βαθιά urban canyons δεν υπάρχει προοπτική προσδιορισμού λωρίδας με συμβατικό GNSS. Ανοιχτό PDF, 14 σελίδες, **αξίζει πλήρη ανάγνωση**.
+- **Ο θόρυβος του CARLA επαληθεύτηκε από τον πηγαίο κώδικα** (`GnssSensor.cpp`): λευκός Gaussian, νέο δείγμα κάθε tick, **καμία χρονική συσχέτιση**. Υποστηρίζει όμως `noise_lat_bias` — δεν το ξέραμε.
+- **Γνωστό bug CARLA #4235:** σφάλματα εκατοντάδων μέτρων σε round-trip μετατροπές x/y ↔ lat/lon. **→ Απόφαση: δούλεψε αποκλειστικά σε μέτρα x/y, μην κάνεις καθόλου μετατροπή.** Ακυρώνει την εκκρεμότητα «lat/lon → x/y» που είχε προγραμματιστεί.
+- **Κατώφλι πλήρους απώλειας στίγματος:** μέσο ύψος κτηρίων 40-45 m → λιγότεροι από 4 δορυφόροι.
+
+**Τιμιότητα/επιφυλάξεις που δηλώθηκαν ρητά στον χρήστη:**
+
+- **3 από τις 6 αρχικές πηγές είναι paywalled** ([S2], [S3], [S6]) — δεν διαβάστηκαν.
+- **Η [S1] (USPTO patent) δεν είναι έγκυρη πηγή** — σαρωμένο δίπλωμα ευρεσιτεχνίας, μπήκε από λάθος. Σημειώθηκε ως άκυρη στο `READING_LIST.md`.
+- **Οι περιγραφές που είχαν αποδοθεί στις [S2]/[S3] στο αρχικό `READING_LIST.md` («multipath έως ~30m», «RMS ~3m») δεν επαληθεύτηκαν** — διορθώθηκε ρητά στο αρχείο. Τα μεγέθη επιβεβαιώνονται από άλλες πηγές, αλλά η απόδοση σε εκείνα τα papers δεν στέκει.
+- **Δεν βρέθηκε δημοσιευμένη συχνότητα εμφάνισης NLOS συμβάντων** ούτε χρονική σταθερά ειδικά για αυτοκίνητο σε urban canyon — σημειώθηκαν ως κενά/παραδοχές.
+
+**Session-end state:** Το home setup δουλεύει. Ο χρήστης έχει καθαρή εννοιολογική εικόνα του observation model. Έχει τεκμηριωμένο μοντέλο θορύβου έτοιμο προς υλοποίηση, με πηγή σε κάθε παράμετρο.
+
+**Εκκρεμότητες / επόμενα βήματα:**
+
+1. **Ο χρήστης έχει να διαβάσει:** Groves 2011 (νέο, προτεραιότητα), Probabilistic Robotics Κεφ. 6 (measurement models — **ζήτησε ρητά υπενθύμιση**), Labbe Ch.12 (ακόμα ημιτελές).
+2. **Ground truth στο CSV** (`vehicle.get_transform()`) — δεν έγινε ακόμα, ήταν το επόμενο βήμα πριν την εκτροπή.
+3. **`gps_noise.py`** — δικό μας μοντέλο θορύβου σε μέτρα, βάσει του πίνακα στο `GPS_NOISE_MODEL.md`.
+4. **Κάτοψη (minimap)** — ο χρήστης τη ζήτησε· διαπιστώθηκε ότι waypoints + ground truth **δεν** χρειάζονται μετατροπή συντεταγμένων, άρα μπορεί να γίνει άμεσα. Το `no_rendering_mode.py` του CARLA (1319 γραμμές) απορρίφθηκε ως μη υπερασπίσιμο· θα φτιαχτεί δική του μίνι έκδοση (~60 γραμμές). Το κρίσιμο κομμάτι είναι η μετατροπή μέτρα→pixels.
+5. **Μέτρησε το aspect ratio (ύψος κτηρίου / πλάτος δρόμου) του Town10HD** — θα είναι πρωτότυπο νούμερο στη διπλωματική.
+6. **Προθεσμία διπλωματικής: ΑΓΝΩΣΤΗ** — ρωτήθηκε ο χρήστης, δεν απάντησε. **Ξαναρώτησέ τον** — χρειάζεται για ρεαλιστικό σχεδιασμό χρόνου.
+
+**Working-style notes που επιβεβαιώθηκαν ξανά:**
+
+- Όταν είπε «μπερδεύτηκα», το σωστό ήταν πλήρες backtrack σε αναλογίες — **όχι** άλλος κώδικας. Δούλεψε.
+- Ο έλεγχος κατανόησης με ερώτηση («γιατί δεν φτάνουν μόνο οι λωρίδες;») έδωσε σωστή απάντηση και επιβεβαίωσε ότι η έννοια κάθισε.
+- Ζητάει ενεργά **τιμιότητα** για την προέλευση των ιδεών («πώς σου ήρθε αυτό;») και για την αξιοπιστία των πηγών. Το να δηλώνεται ρητά τι είναι κλασικό/δανεικό και τι δεν επαληθεύτηκε, το εκτιμά — μην το παραλείπεις.
+
+---
+
+## 18. Session 6 summary (24 Σεπτεμβρίου 2026) — μεταφορά σε Mac
+
+**Νέο μηχάνημα:** ο χρήστης δουλεύει πλέον σε **Mac** (`/Users/paliouv/Localization_thesis`). Το CARLA τρέχει στο **Linux desktop** (lab Ubuntu), όχι στον Mac. Η συνομιλία της session 5 (Windows laptop) αντιγράφηκε στο `~/.claude/projects/-Users-paliouv-Localization-thesis/`.
+
+**Ανακτήθηκαν από το ιστορικό της session 5** (δεν είχαν έρθει στον Mac): `GPS_NOISE_MODEL.md`, `GPS_RESEARCH_REPORT.md`, `READING_LIST.md`, και αυτό το αρχείο. Είναι ίδια με την τελική τους μορφή στο Windows laptop.
+
+**Git:** ο κώδικας των sessions 3-4 ήταν στο GitHub (commit `24e39d7`, 27 Ιουλ). Ο Mac έκανε pull (fast-forward) στις 24 Σεπ. Μια παλιά, μη-committed αλλαγή του Mac στο `spawn_vehicle.py` (αρχή για RGB κάμερα, πάνω στο παλιό stub) κρατήθηκε στο `git stash` — είναι παρωχημένη σε σχέση με την έκδοση της session 3.
+
+**Απόφαση: ζώνες θορύβου με το χέρι.** Αντί για θόρυβο υπολογισμένο από τα κτήρια (επίπεδο 2), ορίζονται χειροκίνητα ορθογώνιες ζώνες στον χάρτη (μέτρα x/y CARLA), η καθεμιά με δικά της σ. Καταγράφηκε ως §9 στο `GPS_NOISE_MODEL.md`. Μπορεί αργότερα να αντικατασταθεί από υπολογισμό από τα κτήρια χωρίς αλλαγή στον υπόλοιπο κώδικα.
+
+**Νέα αρχεία (γράφτηκαν από τον assistant, κατόπιν ρητού αιτήματος «κάνε τα»):**
+- `gps_noise.py` — το μοντέλο θορύβου (Gauss-Markov bias + λευκός θόρυβος + άλματα NLOS + απώλεια σήματος + ζώνες + ανισοτροπία). **Ο χρήστης πρέπει να το διαβάσει γραμμή-γραμμή** πριν το χρησιμοποιήσει — θα χρειαστεί να το υπερασπιστεί.
+- `test_gps_noise.py` — δοκιμή χωρίς CARLA, με ψεύτικη διαδρομή· βγάζει γραφήματα.
+- `export_buildings.py` — τρέχει στο Linux desktop με ανοιχτό CARLA· βγάζει θέση/μέγεθος/ύψος κάθε κτηρίου σε `town10_buildings.json`.
+
+**Σημείωση για τον χάρτη:** το `town10_grid.npy` είναι σε συντεταγμένες OpenDRIVE· το CARLA έχει **ανάποδα τον άξονα y** (`y_carla = -y_xodr`). Δεν έχει επιβεβαιωθεί ακόμα με πραγματική θέση οχήματος.
+
+**Εκκρεμότητες (επιπλέον αυτών της session 5):**
+1. ~~Συγχρονισμός κώδικα με το GitHub~~ — έγινε (pull, 24 Σεπ).
+2. Τρέξε το `export_buildings.py` στο Linux desktop → στείλε το `town10_buildings.json`.
+3. Επιβεβαίωσε την αναστροφή του y: στείλε `vehicle.get_location()` + πού είναι το όχημα στον χάρτη.
+4. Διάλεξε ζώνες θορύβου με βάση τα κτήρια.
+5. **Χρονοδιάγραμμα (δηλώθηκε 24 Σεπ 2026):** υλοποίηση έως **15 Δεκεμβρίου 2026**, συγγραφή έως **15 Ιανουαρίου 2027**. Βλ. πλάνο παρακάτω.
+
+### Πλάνο: υλοποίηση έως 15/12/2026, συγγραφή έως 15/1/2027 (προτάθηκε 24 Σεπ, προς επιβεβαίωση)
+
+| Περίοδος | Στόχος |
+|---|---|
+| 24/9 – 7/10 | ~~Συγχρονισμός κώδικα~~ ✅. Κτήρια → ζώνες θορύβου. Ground truth στο CSV. |
+| 8/10 – 21/10 | Πρώτο PF με filterpy: predict (IMU/ταχύτητα) + update μόνο με GPS, offline στο CSV. Κάτοψη (minimap). |
+| 22/10 – 11/11 | Λωρίδες: ανίχνευση + ταίριασμα με OpenDRIVE → εγκάρσια διόρθωση. |
+| 12/11 – 2/12 | Κτήρια: semantic segmentation + γωνίες (bearings) → διόρθωση κατά μήκος. |
+| 3/12 – 15/12 | Πειράματα: RMSE, λωρίδα σωστή %, σενάρια χωρίς GPS. Figures. |
+| 16/12 – 15/1 | Συγγραφή (περιλαμβάνει γιορτές — τα θεωρητικά κεφάλαια καλό να ξεκινήσουν νωρίτερα). |
+
+**Κίνδυνος:** αν καθυστερήσουν οι λωρίδες, τα κτήρια στριμώχνονται. Ρώτα τον επιβλέποντα αν τα κτήρια μπορούν να είναι σε ελαφρύτερο/πρωτότυπο επίπεδο.
