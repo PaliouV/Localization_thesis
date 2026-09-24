@@ -33,8 +33,28 @@ REACQUIRE = (1.0, 5.0)        # s — επανακλείδωμα μετά από
 
 # Οι ζώνες ορίζονται με το χέρι (GPS_NOISE_MODEL.md §9). Κάθε ζώνη:
 #   dict(x_min, x_max, y_min, y_max, sigma_along, sigma_cross, nlos_rate, dropout)
-# Η πρώτη ζώνη που περιέχει το σημείο κερδίζει. Άδειο = παντού ανοιχτός ουρανός.
-ZONES = []
+# Η πρώτη ζώνη που περιέχει το σημείο κερδίζει — γι' αυτό η σειρά μετράει.
+#
+# Τα όρια (μέτρα CARLA, Town10HD) διαλέχτηκαν πάνω στον χάρτη town10_canyon.png
+# (canyon_map.py, από τον χάρτη κτηρίων LiDAR). Στα σχόλια: μέσο % του ορίζοντα που
+# κρύβουν τα κτήρια πάνω από 15°.
+#
+# Τιμές σ: «ισχυρό» = canyon του GPS_NOISE_MODEL.md §7 ([S4], [G]).
+# «Μέτριο» και «ήπιο» = ΠΑΡΑΔΟΧΗ: ενδιάμεσες τιμές ανάμεσα σε ανοιχτό ουρανό και canyon.
+# nlos_rate = ΠΑΡΑΔΟΧΗ παντού: δεν βρέθηκε δημοσιευμένος ρυθμός (GPS_NOISE_MODEL.md §3).
+STRONG = dict(sigma_along=12.0, sigma_cross=25.0, nlos_rate=1 / 30, dropout=False)
+MODERATE = dict(sigma_along=7.0, sigma_cross=13.0, nlos_rate=1 / 60, dropout=False)
+MILD = dict(sigma_along=4.0, sigma_cross=6.0, nlos_rate=1 / 180, dropout=False)
+NO_SIGNAL = dict(sigma_along=2.5, sigma_cross=2.5, nlos_rate=0.0, dropout=True)
+
+ZONES = [
+    dict(name="bridge", x_min=0, x_max=30, y_min=128, y_max=145, **NO_SIGNAL),             # γέφυρα πάνω από τον νότιο δρόμο
+    dict(name="north road", x_min=-120, x_max=115, y_min=-80, y_max=-45, **STRONG),        # 83% — ουρανοξύστες 55-154 m
+    dict(name="NW corner + west road", x_min=-120, x_max=-85, y_min=-80, y_max=25, **STRONG),  # 80%
+    dict(name="inner road y~65", x_min=-50, x_max=90, y_min=58, y_max=75, **STRONG),       # 81%
+    dict(name="SW corner + south road", x_min=-120, x_max=-40, y_min=85, y_max=145, **MILD),   # 45% — προς τη θάλασσα
+    dict(name="rest of town", x_min=-130, x_max=125, y_min=-85, y_max=155, **MODERATE),    # 71%
+]
 
 
 def zone_at(x, y, zones):
