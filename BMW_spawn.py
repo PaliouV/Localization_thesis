@@ -26,10 +26,10 @@ if vehicle is None:
 
 tm = client.get_trafficmanager()
 vehicle.set_autopilot(True, tm.get_port())
-tm.vehicle_percentage_speed_difference(vehicle, 30)   # 30% πιο αργά από το όριο ταχύτητας
+tm.vehicle_percentage_speed_difference(vehicle, 10)   # 10% πιο αργά από το όριο ταχύτητας
 tm.distance_to_leading_vehicle(vehicle, 5.0)           # μεγαλύτερη απόσταση ασφαλείας
-tm.ignore_lights_percentage(vehicle, 0)                # ποτέ δεν αγνοεί φανάρι
-tm.ignore_signs_percentage(vehicle, 0)                 # ποτέ δεν αγνοεί πινακίδα
+tm.ignore_lights_percentage(vehicle, 100)                # παντα αγνοεί φανάρι
+tm.ignore_signs_percentage(vehicle, 100)                 # παντα αγνοεί πινακίδα
 
 
 state = {"gps": "...", "imu": "..."}
