@@ -25,8 +25,17 @@ if vehicle is None:
     raise RuntimeError("Could not spawn vehicle - spawn point may be occupied.")
 
 tm = client.get_trafficmanager()
+
+original_settings = world.get_settings()
+
+settings = world.get_settings()
+settings.synchronous_mode = True
+settings.fixed_delta_seconds = 0.05
+world.apply_settings(settings)
+tm.set_synchronous_mode(True)
+
 vehicle.set_autopilot(True, tm.get_port())
-tm.vehicle_percentage_speed_difference(vehicle, 10)   # 10% πιο αργά από το όριο ταχύτητας
+tm.vehicle_percentage_speed_difference(vehicle, 30)   # 10% πιο αργά από το όριο ταχύτητας
 tm.distance_to_leading_vehicle(vehicle, 5.0)           # μεγαλύτερη απόσταση ασφαλείας
 tm.ignore_lights_percentage(vehicle, 100)                # παντα αγνοεί φανάρι
 tm.ignore_signs_percentage(vehicle, 100)                 # παντα αγνοεί πινακίδα
@@ -81,20 +90,24 @@ writer.writerow(["sim_time", "gt_x", "gt_y", "gt_yaw", "vel", "gps_lat", "gps_lo
 
 try:
     while True:
+        world.tick()
+        world.tick()
         sim_time = world.get_snapshot().timestamp.elapsed_seconds
         t = vehicle.get_transform()
         v = vehicle.get_velocity()
         speed = math.sqrt(v.x**2 + v.y**2 + v.z**2)
 
         if "gps_raw" not in state or "imu_raw" not in state:
-            time.sleep(0.1)
+            #time.sleep(0.1)
             continue
         writer.writerow([sim_time, t.location.x, t.location.y, t.rotation.yaw, speed] + list(state["gps_raw"]) + list(state["imu_raw"]))
-        time.sleep(0.1)
+        #time.sleep(0.1)
 
 except KeyboardInterrupt:
     pass
 finally:
+    world.apply_settings(original_settings)   # το CARLA γυρίζει όπως ήταν (asynchronous)
+    tm.set_synchronous_mode(False)            # και το autopilot
     csv_file.close()
     gnss_sensor.destroy()
     imu_sensor.destroy()
