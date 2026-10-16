@@ -1,0 +1,24 @@
+# Προσωπικά αρχεία πηγών (PDF κ.λπ.) — δεν ανεβαίνουν στο git
+sources/
+
+# Κρυφά αρχεία του macOS
+.DS_Store
+
+# Παρουσιάσεις για τα meetings
+presentations/
+
+# Αρχεία παραδειγμάτων MATLAB (της MathWorks) — δεν ανεβαίνουν στο git.
+# Τα δικά μας αρχεία στο matlab/ ανεβαίνουν κανονικά.
+matlab/GNSSMultipathDrivingUrbanCanyonExample.m
+matlab/downtownBostonDrivingScenario.mat
+
+# Αποτελέσματα και δεδομένα του MATLAB που ξαναβγαίνουν από τα scripts
+# (whampoa.osm: εξαγωγή από το OpenStreetMap, βλ. matlab/MATLAB_GNSS.md)
+matlab/*.csv
+matlab/whampoa.osm
+
+# δεδομένα τρίτων (UrbanNav)
+gnss_sim/urbannav/
+
+# Τοπικά αρχεία που δεν ανεβαίνουν (αναφορά ελέγχου πηγών, 7 Οκτ 2026)
+GPS_SOURCES_AUDIT.md

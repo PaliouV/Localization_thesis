@@ -7,7 +7,7 @@
 
 Τρέχει στο Linux desktop, με ανοιχτό το CARLA στο Town10HD και ΚΑΝΕΝΑ άλλο script
 (βάζει το CARLA σε synchronous mode — το επαναφέρει στο τέλος):
-    ~/carla-env/bin/python lidar_mapping.py --minutes 10
+    ~/carla-env/bin/python town10/lidar_mapping.py --minutes 10
 
 Ctrl+C σταματάει νωρίτερα και σώζει κανονικά ό,τι έχει μαζευτεί.
 Έξοδος: town10_lidar_map.npz

@@ -3,12 +3,13 @@
 
     σφάλμα(t) = αργό_bias(t) + λευκός_θόρυβος(t) + άλμα_NLOS(t)
 
-Όλες οι τιμές έρχονται από το GPS_NOISE_MODEL.md (§7 ΤΕΛΙΚΟ ΜΟΝΤΕΛΟ, §9 ζώνες).
-Οι ετικέτες [G], [S4], [S5], [GOV] είναι οι πηγές εκεί.
-Ό,τι σημειώνεται ΠΑΡΑΔΟΧΗ δεν είναι δημοσιευμένη τιμή — δηλώνεται στη διπλωματική.
+Τεκμηρίωση στο GPS_NOISE_MODEL.md: παράμετροι §4, ζώνες §5, ρύθμιση §6, λόγος και TAU §7.
+ΠΑΡΑΔΟΧΗ = δική μας επιλογή χωρίς πηγή. ΡΥΘΜΙΣΗ = τιμή ρυθμισμένη ώστε το σφάλμα
+θέσης να ταιριάζει με πραγματικές μετρήσεις (§6, calibrate_gps_noise.py).
 
 Χρήση (μία φορά ανά δείγμα GPS):
-    noise = GpsNoise(zones=ZONES, dt=1.0)
+    noise = GpsNoise(zones=ZONES, dt=1.0)                    # βάση: λόγος 2, TAU 30 s
+    noise = GpsNoise(zones=ZONES, dt=1.0, ratio=1.2, tau=10) # άλλο τρέξιμο, χωρίς αλλαγή στο αρχείο
     fix = noise.step(x, y, yaw_deg)   # (x_noisy, y_noisy) ή None αν δεν υπάρχει σήμα
 """
 
@@ -17,34 +18,41 @@ import numpy as np
 
 # --- Ανοιχτός ουρανός: ισχύει όπου δεν υπάρχει ζώνη -----------------------
 OPEN_SKY = dict(
-    sigma_along=2.5,   # m — bias κατά μήκος του δρόμου, [GOV] ~3 m (95%)
+    sigma_along=2.5,   # m — ΠΑΡΑΔΟΧΗ (GPS.gov: smartphones ~4.9 m, "typically")
     sigma_cross=2.5,   # m — ίδιο εγκάρσια: χωρίς κτήρια δεν υπάρχει ανισοτροπία
     nlos_rate=0.0,     # άλματα ανά δευτερόλεπτο — χωρίς κτήρια, κανένα NLOS
     dropout=False,     # υπάρχει σήμα
 )
 
 # --- Σταθερές κοινές για όλες τις ζώνες -----------------------------------
-TAU = 30.0             # s — χρονική σταθερά του bias. ΠΑΡΑΔΟΧΗ: 10-60 s από [S5] §4.3
-WHITE_SIGMA = 1.0      # m — λευκός θόρυβος (γνήσιο multipath), [G] UERE
-NLOS_SHAPE = 2.5       # σχήμα Γάμμα, [S5] Πίν. 4 (γ = 2.40-2.62)
-NLOS_SCALE = 8.0       # m — ΠΑΡΑΔΟΧΗ: μέσο ~20 m, ώστε τα άλματα να πέφτουν στο 4-49 m του [S4] Πίν. 7-9
-NLOS_DURATION = (2.0, 10.0)   # s — ΠΑΡΑΔΟΧΗ: όσο περνάς δίπλα από ένα κτήριο
-REACQUIRE = (1.0, 5.0)        # s — επανακλείδωμα μετά από απώλεια, κατασκευαστές δεκτών
+TAU = 30.0             # s — χρονική σταθερά του bias (προεπιλογή). ΠΑΡΑΔΟΧΗ — δεν βρέθηκε πηγή για κινούμενο όχημα.
+                       #     Δοκιμάζεται με 10 / 30 / 120 s (§7β): δίνεται απ' έξω, GpsNoise(..., tau=...)
+RATIO = 2.0            # λόγος σ εγκάρσια / σ κατά μήκος (προεπιλογή). Ποιοτικά [G], Wang 2012 (προσομοιώσεις):
+                       #     εγκάρσια χειρότερο, χωρίς αριθμό. Suhr 2017 (πραγματικά): ~1.16. Δοκιμάζεται με
+                       #     1.2 και 2 (§7α): δίνεται απ' έξω, GpsNoise(..., ratio=...). Ένας για όλες τις ζώνες.
+WHITE_SIGMA = 1.0      # m — λευκός θόρυβος. ΠΑΡΑΔΟΧΗ
+NLOS_SHAPE = 2.5       # σχήμα της κατανομής Γάμμα για το μέγεθος των αλμάτων. ΠΑΡΑΔΟΧΗ
+NLOS_DURATION = (2.0, 10.0)   # s — πόσο κρατάει ένα άλμα. ΠΑΡΑΔΟΧΗ
+REACQUIRE = (1.0, 5.0)        # s — επανακλείδωμα μετά από απώλεια σήματος. ΠΑΡΑΔΟΧΗ
 
-# Οι ζώνες ορίζονται με το χέρι (GPS_NOISE_MODEL.md §9). Κάθε ζώνη:
-#   dict(x_min, x_max, y_min, y_max, sigma_along, sigma_cross, nlos_rate, dropout)
+# Οι ζώνες ορίζονται με το χέρι (GPS_NOISE_MODEL.md §5). Κάθε ζώνη:
+#   dict(x_min, x_max, y_min, y_max, sigma, nlos_rate, nlos_scale, dropout)
+#   sigma      = συνολικό σ του αργού bias (m). Ο λόγος (RATIO) το μοιράζει σε κατά μήκος /
+#                εγκάρσια, με το ίδιο συνολικό: σ_κατά_μήκος² + σ_εγκάρσια² = sigma²
+#   nlos_rate  = πόσα άλματα NLOS ανά δευτερόλεπτο
+#   nlos_scale = κλίμακα (m) της Γάμμα για το μέγεθος του άλματος· μέσο άλμα = NLOS_SHAPE × nlos_scale
 # Η πρώτη ζώνη που περιέχει το σημείο κερδίζει — γι' αυτό η σειρά μετράει.
 #
-# Τα όρια (μέτρα CARLA, Town10HD) διαλέχτηκαν πάνω στον χάρτη town10_canyon.png
-# (canyon_map.py, από τον χάρτη κτηρίων LiDAR). Στα σχόλια: μέσο % του ορίζοντα που
+# Τα όρια (μέτρα CARLA, Town10HD) διαλέχτηκαν πάνω στον χάρτη town10/town10_canyon.png
+# (town10/canyon_map.py, από τον χάρτη κτηρίων LiDAR). Στα σχόλια: μέσο % του ορίζοντα που
 # κρύβουν τα κτήρια πάνω από 15°.
 #
-# Τιμές σ: «ισχυρό» = canyon του GPS_NOISE_MODEL.md §7 ([S4], [G]).
-# «Μέτριο» και «ήπιο» = ΠΑΡΑΔΟΧΗ: ενδιάμεσες τιμές ανάμεσα σε ανοιχτό ουρανό και canyon.
-# nlos_rate = ΠΑΡΑΔΟΧΗ παντού: δεν βρέθηκε δημοσιευμένος ρυθμός (GPS_NOISE_MODEL.md §3).
-STRONG = dict(sigma_along=12.0, sigma_cross=25.0, nlos_rate=1 / 30, dropout=False)
-MODERATE = dict(sigma_along=7.0, sigma_cross=13.0, nlos_rate=1 / 60, dropout=False)
-MILD = dict(sigma_along=4.0, sigma_cross=6.0, nlos_rate=1 / 180, dropout=False)
+# sigma, nlos_rate, nlos_scale: ΡΥΘΜΙΣΗ με πραγματικές μετρήσεις: STRONG ↔ [S4] Πίν. 2, 4,
+# MODERATE / MILD ↔ Suhr 2017 Πίν. I–II (GPS_NOISE_MODEL.md §6). Ποια μέτρηση ταιριάζει
+# με ποια ζώνη είναι ΠΑΡΑΔΟΧΗ (§6β). Έλεγχος: python calibrate_gps_noise.py
+STRONG = dict(sigma=12.0, nlos_rate=1 / 10, nlos_scale=22.0, dropout=False)
+MODERATE = dict(sigma=10.0, nlos_rate=1 / 30, nlos_scale=16.0, dropout=False)
+MILD = dict(sigma=2.0, nlos_rate=1 / 30, nlos_scale=8.0, dropout=False)
 NO_SIGNAL = dict(sigma_along=2.5, sigma_cross=2.5, nlos_rate=0.0, dropout=True)
 
 ZONES = [
@@ -69,12 +77,28 @@ def zone_at(x, y, zones):
     return OPEN_SKY
 
 
+def zone_sigmas(zone, ratio):
+    """σ κατά μήκος και σ εγκάρσια μιας ζώνης.
+
+    Ζώνη με ένα συνολικό "sigma": ο λόγος το μοιράζει, κρατώντας ίδιο το συνολικό
+    (σ_κατά_μήκος² + σ_εγκάρσια² = sigma²), ώστε το μέγεθος του λάθους να μένει
+    περίπου ίδιο με κάθε λόγο και να αλλάζει μόνο η κατεύθυνσή του.
+    Ζώνη με δικά της sigma_along / sigma_cross (OPEN_SKY, NO_SIGNAL): μένουν όπως είναι.
+    """
+    if "sigma" in zone:
+        along = zone["sigma"] / math.sqrt(1 + ratio**2)
+        return along, ratio * along
+    return zone["sigma_along"], zone["sigma_cross"]
+
+
 class GpsNoise:
-    def __init__(self, zones=ZONES, dt=1.0, seed=None):
+    def __init__(self, zones=ZONES, dt=1.0, seed=None, ratio=RATIO, tau=TAU):
         self.zones = zones
         self.dt = dt
+        self.ratio = ratio
+        self.tau = tau
         self.rng = np.random.default_rng(seed)
-        self.alpha = math.exp(-dt / TAU)   # πόσο "θυμάται" το bias από το προηγούμενο δείγμα
+        self.alpha = math.exp(-dt / tau)   # πόσο "θυμάται" το bias από το προηγούμενο δείγμα
 
         self.bias = np.zeros(2)            # αργό bias σε x/y, μέτρα
         self.nlos_offset = np.zeros(2)     # τρέχον άλμα NLOS σε x/y, μέτρα
@@ -98,10 +122,12 @@ class GpsNoise:
         #    προηγούμενου και προσθέτει λίγο καινούργιο. Ο παράγοντας sqrt(1-α²)
         #    κρατάει την τυπική απόκλιση ίση με sigma μακροπρόθεσμα.
         #    Το bias ζει σε x/y (δεν γυρίζει όταν στρίβει το όχημα)· μόνο το
-        #    καινούργιο κομμάτι έχει την ανισοτροπία του δρόμου (εγκάρσια > κατά μήκος, [G]).
-        #    Όταν αλλάζει ζώνη, το bias προσαρμόζεται σταδιακά (~TAU), όχι απότομα.
+        #    καινούργιο κομμάτι έχει την ανισοτροπία του δρόμου: εγκάρσια > κατά μήκος
+        #    ποιοτικά [G], Wang 2012 (προσομοιώσεις)· ο λόγος είναι παράμετρος (self.ratio).
+        #    Όταν αλλάζει ζώνη, το bias προσαρμόζεται σταδιακά (~tau), όχι απότομα.
+        sigma_along, sigma_cross = zone_sigmas(zone, self.ratio)
         n_along, n_cross = self.rng.standard_normal(2)
-        fresh = zone["sigma_along"] * n_along * along + zone["sigma_cross"] * n_cross * cross
+        fresh = sigma_along * n_along * along + sigma_cross * n_cross * cross
         self.bias = self.alpha * self.bias + math.sqrt(1 - self.alpha**2) * fresh
 
         # 2. Λευκός θόρυβος — καινούργιος σε κάθε δείγμα, ίδιος προς όλες τις κατευθύνσεις.
@@ -113,7 +139,7 @@ class GpsNoise:
         if self.nlos_left > 0:
             self.nlos_left -= self.dt
         elif self.rng.random() < zone["nlos_rate"] * self.dt:
-            size = self.rng.gamma(NLOS_SHAPE, NLOS_SCALE)
+            size = self.rng.gamma(NLOS_SHAPE, zone["nlos_scale"])
             angle = self.rng.uniform(0, 2 * math.pi)
             self.nlos_offset = size * np.array([math.cos(angle), math.sin(angle)])
             self.nlos_left = self.rng.uniform(*NLOS_DURATION)

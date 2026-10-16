@@ -2,19 +2,22 @@
 Εξάγει όλα τα κτήρια του τρέχοντος χάρτη του CARLA σε town10_buildings.json.
 
 Τρέχει στο Linux desktop, με το CARLA ανοιχτό (Town10HD φορτωμένο):
-    ~/carla-env/bin/python export_buildings.py
+    ~/carla-env/bin/python town10/export_buildings.py
 
 Για κάθε κτήριο γράφει κέντρο, μισές διαστάσεις (extent), περιστροφή και ύψος,
 σε μέτρα x/y/z του CARLA. Από αυτά θα διαλέξουμε τις ζώνες θορύβου
-(GPS_NOISE_MODEL.md §9) και θα μετρήσουμε τον λόγο ύψος κτηρίου / πλάτος δρόμου.
+(GPS_NOISE_MODEL.md §5) και θα μετρήσουμε τον λόγο ύψος κτηρίου / πλάτος δρόμου.
 
 Αν υπάρχει ήδη όχημα με role_name "hero" (π.χ. από το vehicle_spawn.py),
 τυπώνει και τη θέση του — για να ελέγξουμε τον άξονα y του χάρτη.
 """
 
 import json
+import os
 
 import carla
+
+HERE = os.path.dirname(os.path.abspath(__file__))   # ο φάκελος town10/
 
 client = carla.Client("localhost", 2000)
 client.set_timeout(10.0)
@@ -39,7 +42,7 @@ for obj in world.get_environment_objects(carla.CityObjectLabel.Buildings):
         top_z=box.location.z + box.extent.z,
     ))
 
-with open("town10_buildings.json", "w") as f:
+with open(os.path.join(HERE, "town10_buildings.json"), "w") as f:
     json.dump(dict(map=map_name, buildings=buildings), f, indent=1)
 
 heights = sorted(b["height"] for b in buildings)

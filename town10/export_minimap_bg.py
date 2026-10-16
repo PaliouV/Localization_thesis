@@ -13,7 +13,7 @@
 
 Τρέχει στο Linux desktop, με ανοιχτό το CARLA, ΑΦΟΥ έχει τρέξει μία φορά
 το no_rendering_mode.py (για να υπάρχει το .tga):
-    ~/carla-env/bin/python export_minimap_bg.py /path/to/cache/no_rendering_mode
+    ~/carla-env/bin/python town10/export_minimap_bg.py /path/to/cache/no_rendering_mode
 """
 
 import glob
@@ -23,6 +23,8 @@ import sys
 
 import carla
 import pygame
+
+HERE = os.path.dirname(os.path.abspath(__file__))   # ο φάκελος town10/
 
 MARGIN = 50              # ίδιο με το no_rendering_mode.py
 PIXELS_PER_METER = 12    # ίδιο με το no_rendering_mode.py
@@ -53,8 +55,8 @@ print(f"Εικόνα: {files[0]} — {image.get_width()}x{image.get_height()} px
 if image.get_width() != expected:
     print("⚠️ Το μέγεθος δεν ταιριάζει — πιθανόν άλλος χάρτης ή άλλη έκδοση του script.")
 
-pygame.image.save(image, "town10_minimap.png")
-with open("town10_minimap.json", "w") as f:
+pygame.image.save(image, os.path.join(HERE, "town10_minimap.png"))
+with open(os.path.join(HERE, "town10_minimap.json"), "w") as f:
     json.dump(dict(map=map_name, min_x=min_x, min_y=min_y, pixels_per_meter=pixels_per_meter), f, indent=1)
 
 print(f"min_x={min_x:.2f}, min_y={min_y:.2f}, pixels_per_meter={pixels_per_meter}")

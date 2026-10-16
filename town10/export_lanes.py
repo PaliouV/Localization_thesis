@@ -11,7 +11,7 @@
   - τύπος λωρίδας και αν είναι μέσα σε διασταύρωση
 
 Τρέχει στο Linux desktop, με ανοιχτό το CARLA στο Town10HD:
-    ~/carla-env/bin/python export_lanes.py
+    ~/carla-env/bin/python town10/export_lanes.py
 """
 
 import csv

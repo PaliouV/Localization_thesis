@@ -11,15 +11,20 @@
 """
 
 import math
+import os
+
 import numpy as np
 import matplotlib.pyplot as plt
 
 from gps_noise import GpsNoise, zone_at
 
+TOWN10 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "town10")
+
 TEST_ZONES = [
-    # στενός δρόμος με ψηλά κτήρια (τιμές από GPS_NOISE_MODEL.md §7)
+    # στενός δρόμος με ψηλά κτήρια (ενδεικτικές τιμές δοκιμής, όχι οι ρυθμισμένες ζώνες
+    # του gps_noise.py — αυτές ελέγχονται με το calibrate_gps_noise.py)
     dict(name="canyon", x_min=-80, x_max=80, y_min=0, y_max=40,
-         sigma_along=12.0, sigma_cross=25.0, nlos_rate=1 / 20, dropout=False),
+         sigma_along=12.0, sigma_cross=25.0, nlos_rate=1 / 20, nlos_scale=8.0, dropout=False),
     # σημείο χωρίς σήμα (π.χ. κάτω από γέφυρα)
     dict(name="dropout", x_min=100, x_max=115, y_min=60, y_max=80,
          sigma_along=2.5, sigma_cross=2.5, nlos_rate=0.0, dropout=True),
@@ -46,8 +51,8 @@ def drive(route, speed, dt, laps):
 
 def load_map():
     """Το occupancy grid, γυρισμένο σε συντεταγμένες CARLA (y_carla = -y_opendrive)."""
-    grid = np.load("town10_grid.npy")
-    x0, y0, res = np.load("town10_meta.npy")
+    grid = np.load(os.path.join(TOWN10, "town10_grid.npy"))
+    x0, y0, res = np.load(os.path.join(TOWN10, "town10_meta.npy"))
     h, w = grid.shape
     extent = [x0, x0 + w * res, -(y0 + h * res), -y0]
     return np.flipud(grid), extent

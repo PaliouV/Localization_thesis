@@ -4,6 +4,9 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 from matplotlib.collections import PatchCollection
 import math
+import os
+
+HERE = os.path.dirname(os.path.abspath(__file__))   # ο φάκελος town10/
 
 def sample_road_geometry(geom, num_samples=200):
     """Sample (x,y) points from an OpenDRIVE geometry element."""
@@ -91,7 +94,7 @@ def create_occupancy_grid(points, resolution=1.0, road_width=4.0):
 
 if __name__ == '__main__':
     print("Parsing Town10HD_Opt.xodr ...")
-    points = parse_xodr('Town10HD_Opt.xodr')
+    points = parse_xodr(os.path.join(HERE, 'Town10HD_Opt.xodr'))
     print(f"  → {len(points)} road centerline points")
 
    # Άλλαξε αυτές τις παραμέτρους:
@@ -99,8 +102,8 @@ if __name__ == '__main__':
     print(f"  → Grid size: {grid.shape} | Origin: {origin} | Resolution: {res}m")
 
     # Save
-    np.save('town10_grid.npy', grid)
-    np.save('town10_meta.npy', np.array([origin[0], origin[1], res]))
+    np.save(os.path.join(HERE, 'town10_grid.npy'), grid)
+    np.save(os.path.join(HERE, 'town10_meta.npy'), np.array([origin[0], origin[1], res]))
     print("  → Saved: town10_grid.npy, town10_meta.npy")
 
     # Visualize
@@ -108,6 +111,6 @@ if __name__ == '__main__':
     plt.imshow(grid, cmap='gray', origin='lower')
     plt.title('Town10 Occupancy Grid')
     plt.colorbar(label='0=obstacle, 1=free')
-    plt.savefig('town10_occupancy.png', dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(HERE, 'town10_occupancy.png'), dpi=150, bbox_inches='tight')
     plt.show()
     print("  → Saved: town10_occupancy.png")

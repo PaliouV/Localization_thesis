@@ -12,7 +12,7 @@
 υψών: κάτω από ~3 m είναι κάγκελα, κλιματιστικά, τέντες, πανό κ.λπ.
 
 Δεν χρειάζεται CARLA:
-    python clean_buildings.py
+    python town10/clean_buildings.py
 """
 
 import json

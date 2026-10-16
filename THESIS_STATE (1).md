@@ -54,7 +54,7 @@ The user realised (29 Jun) that OSM as known map does NOT work in CARLA (scenes 
 - `world.get_environment_objects()` → bounding boxes of all buildings
 - Ground truth pose available for evaluation only (not at runtime)
 
-**Status:** User already extracted `Town10HD_Opt.xodr` from CARLA. Files present in repo. Needs to be presented/confirmed with supervisor.
+**Status:** User already extracted `town10/Town10HD_Opt.xodr` from CARLA. Files present in repo. Needs to be presented/confirmed with supervisor.
 
 ---
 
@@ -82,7 +82,7 @@ The user realised (29 Jun) that OSM as known map does NOT work in CARLA (scenes 
 
 ### What she built (Particle Filter localization)
 
-- State `(x, y, θ)`, bicycle motion model, camera-based observations (signs, lanes, markings)
+- State `(x, y, θ)`, bicycle motion model, camera-based observations (signs, lanes, markings described in §3.4 — but the experiments used **only road markings**: lines, lanes, crosswalks; no signs, §4.1.2)
 - KD-tree data association, systematic resampling, ESS < threshold trigger
 - Heading via `atan2(Σ wᵢ sin θᵢ, Σ wᵢ cos θᵢ)`
 - Kidnapped detection via IMU pitch/yaw thresholds
@@ -90,8 +90,11 @@ The user realised (29 Jun) that OSM as known map does NOT work in CARLA (scenes 
 
 ### Results (35 cm/s, normal route)
 
-- Algorithmic: RMSE 0.246 m, MaxE 0.573 m, runtime 333 ms/iter
-- Operational: RMSE 0.509 m, MaxE 1.216 m, runtime 38 ms/iter
+- Algorithmic: RMSE 0.246 m, MaxE 0.573 m
+- Operational: RMSE 0.509 m, MaxE 1.216 m
+- Runtime: the **PF** takes 333.69 ms per run; 38.16 ms is the **navigation system's** loop, not the PF (Table 4.7). The operational error is higher because the navigation reads a stale PF estimate between PF updates.
+- Experiments ran in **simulation** (official BFMC simulator, Gazebo + ROS), not on the real track.
+- Full notes: `sources/Christodoulou_2026_PF_Localization_BFMC.md`
 
 ### What's reusable
 
@@ -108,10 +111,10 @@ The user realised (29 Jun) that OSM as known map does NOT work in CARLA (scenes 
 | Map source | Handcrafted BFMC feature map | CARLA OpenDRIVE + scene metadata |
 | Scale | 1:10, ~10 m track | Full-scale urban, km-scale |
 | GPS | Not used | Used (noisy, dropouts in canyons) |
-| Observations | Signs, lanes, markings | Lane lines + buildings (semantic seg) |
+| Observations | Road markings only in experiments (signs described, not used) | Lane lines + buildings (semantic seg) |
 | Initialization | Known start | Initial from noisy GPS |
 | Speeds | 25-60 cm/s | 10-50 km/h |
-| Environment | Indoor controlled | CARLA urban, tall buildings, tunnels |
+| Environment | Simulation (BFMC simulator, Gazebo + ROS) | CARLA urban, tall buildings, tunnels |
 | **PF implementation** | **Custom** | **filterpy (approved by supervisor)** |
 
 ### Code access
@@ -296,7 +299,7 @@ In rough priority:
 4. ~~Add GPS noise simulation~~ — DONE (session 4), but only in `vehicle_spawn.py` (manual-drive reference script), not yet in `spawn_vehicle.py` (autopilot script, the one actually being developed) — worth porting over.
 5. ~~Fix 2 known issues in `spawn_vehicle.py`~~ — DONE (session 4): added `None` checks (raise `RuntimeError` with a clear message) after each `try_spawn_actor` call; moved the `render()` throttle check-and-update fully inside `render_lock` so it's atomic across the GNSS/IMU callback threads.
 6. **Run Labbe's 1D/2D PF example** locally with filterpy, modify parameters (N, σ), observe results.
-7. **CARLA OpenDRIVE exploration:** load `Town10HD_Opt.xodr` (already in repo), walk through lane geometry extraction — ideally via `world.get_map()`/waypoints rather than the old raw-XML `parse_xodr.py` approach (see Section 4 decision). Small Python script that user writes.
+7. **CARLA OpenDRIVE exploration:** load `town10/Town10HD_Opt.xodr` (already in repo), walk through lane geometry extraction — ideally via `world.get_map()`/waypoints rather than the old raw-XML `town10/parse_xodr.py` approach (see Section 4 decision). Small Python script that user writes.
 8. **Wire GNSS/IMU into filterpy:** feed live sensor readings into a first filterpy PF instance, get a position estimate.
 
 ### Things to do at home (no CARLA / lab desktop needed) — added session 4
@@ -332,8 +335,8 @@ GOOD PATTERNS from session 2: small step → check understanding → next step. 
 
 **REVERSED session 4:** the user decided to make `vehicle_spawn.py` the primary script going forward and set `spawn_vehicle.py` aside ("το ξεχνάμε το άλλο"). Reasoning discussed: `vehicle_spawn.py` is functionally more complete (manual control, multi-camera, dual clean/noisy GPS, CSV logging), and its fixed-spawn-point + GPS-noise features were already added this session. **Caveat flagged to user (not yet acted on):** several classes in `vehicle_spawn.py` (e.g. the multi-camera display, CSV logger) are still AI-generated and not yet read/understood line-by-line by the user the way `spawn_vehicle.py` was — worth walking through before building much further, since he needs to be able to defend every part of the codebase he ships.
 
-- `Town10HD_Opt.xodr` — OpenDRIVE map extracted from CARLA (useful, keep)
-- `parse_xodr.py` — parser stub (AI-generated, review needed). Does raw XML parsing of road centerlines; per Section 4's decision, future lane work should prefer live `world.get_map()`/waypoints instead of extending this.
+- `town10/Town10HD_Opt.xodr` — OpenDRIVE map extracted from CARLA (useful, keep)
+- `town10/parse_xodr.py` — parser stub (AI-generated, review needed). Does raw XML parsing of road centerlines; per Section 4's decision, future lane work should prefer live `world.get_map()`/waypoints instead of extending this.
 - `spawn_vehicle.py` — **SET ASIDE as of session 4** (see reversal note above). Was actively developed by the user in session 3: fixed the `world.blueprint_library()` bug himself, built a working autopilot + GNSS/IMU + live 2-line terminal display script. **Reviewed and fixed session 4** — the 2 issues found (no `None` check after `try_spawn_actor`, race condition in `render()`'s throttle) were both fixed, but the script itself is no longer the active development target.
 - `vehicle_spawn.py` — **NOW THE PRIMARY SCRIPT as of session 4.** Bigger, originally AI-generated (pygame manual driving + multi-camera + GNSS/IMU CSV logging, ~400 lines) — parts of it (camera display class, CSV logger) are not yet read/understood line-by-line by the user, unlike `spawn_vehicle.py` was. **Updated session 4:** W-key throttle lowered from full (1.0) to a calmer value (user changed it himself); `spawn_vehicle()` now tries a fixed spawn point (index 0) first instead of a full random shuffle, falling back to a random other point only if occupied; a second GNSS sensor was added with noise attributes (`noise_lat_stddev`/`noise_lon_stddev` = 0.000045° ≈ 5m, `noise_alt_stddev` = 8m, `noise_seed` = 42) alongside the original clean one — both shown in the HUD (`GPS clean` / `GPS noisy`) and logged as separate columns in the CSV.
 - `particle_filter.py` — empty stub
@@ -341,7 +344,7 @@ GOOD PATTERNS from session 2: small step → check understanding → next step. 
 - `GPS_RESEARCH_REPORT.md` — **new, session 5.** Πλήρης βιβλιογραφική αναφορά για το σφάλμα GPS σε urban canyon, γραμμένη από τον assistant κατόπιν ρητού αιτήματος του χρήστη ("διάβασέ τα όλα και δώσε μου αναφορά"). Περιέχει: επαληθευμένους αριθμούς με ακριβή απόδοση, ρητή δήλωση ποιες πηγές ΔΕΝ ήταν προσβάσιμες, τη διάκριση multipath vs NLOS, την επιβεβαίωση της ανισοτροπίας, ανάλυση του πηγαίου κώδικα του CARLA, και προτεινόμενο μοντέλο θορύβου με τεκμηρίωση κάθε παραμέτρου.
 - `GPS_NOISE_MODEL.md` — **new, session 5.** Κενός πίνακας τεκμηρίωσης για το μοντέλο θορύβου GPS: 5 φαινόμενα (χρονική συσχέτιση, μεροληψία, NLOS άλματα, εξάρτηση από κτήρια/ανισοτροπία, dropouts) × παράμετροι, με στήλες «Τιμή» και «Πηγή» προς συμπλήρωση καθώς ο χρήστης διαβάζει τις έξι urban-canyon πηγές. Περιέχει επίσης τις αποφάσεις σχεδιασμού της session 5 (βλ. παρακάτω). **Ο χρήστης δεν το έχει συμπληρώσει ακόμα** — είναι το άμεσο "at home" task.
 - `READING_LIST.md` — **new, session 4.** Running, dated log of articles/sources recommended for the user to read (started with urban canyon GPS error sources). Add new entries at the top with the date whenever a new source is suggested.
-- `town10_grid.npy`, `town10_meta.npy`, `town10_occupancy.png` — precomputed occupancy grid
+- `town10/town10_grid.npy`, `town10/town10_meta.npy`, `town10/town10_occupancy.png` — precomputed occupancy grid
 
 ---
 
@@ -485,13 +488,13 @@ GOOD PATTERNS from session 2: small step → check understanding → next step. 
 **Νέα αρχεία (γράφτηκαν από τον assistant, κατόπιν ρητού αιτήματος «κάνε τα»):**
 - `gps_noise.py` — το μοντέλο θορύβου (Gauss-Markov bias + λευκός θόρυβος + άλματα NLOS + απώλεια σήματος + ζώνες + ανισοτροπία). **Ο χρήστης πρέπει να το διαβάσει γραμμή-γραμμή** πριν το χρησιμοποιήσει — θα χρειαστεί να το υπερασπιστεί.
 - `test_gps_noise.py` — δοκιμή χωρίς CARLA, με ψεύτικη διαδρομή· βγάζει γραφήματα.
-- `export_buildings.py` — τρέχει στο Linux desktop με ανοιχτό CARLA· βγάζει θέση/μέγεθος/ύψος κάθε κτηρίου σε `town10_buildings.json`.
+- `town10/export_buildings.py` — τρέχει στο Linux desktop με ανοιχτό CARLA· βγάζει θέση/μέγεθος/ύψος κάθε κτηρίου σε `town10/town10_buildings.json`.
 
-**Σημείωση για τον χάρτη:** το `town10_grid.npy` είναι σε συντεταγμένες OpenDRIVE· το CARLA έχει **ανάποδα τον άξονα y** (`y_carla = -y_xodr`). Δεν έχει επιβεβαιωθεί ακόμα με πραγματική θέση οχήματος.
+**Σημείωση για τον χάρτη:** το `town10/town10_grid.npy` είναι σε συντεταγμένες OpenDRIVE· το CARLA έχει **ανάποδα τον άξονα y** (`y_carla = -y_xodr`). Δεν έχει επιβεβαιωθεί ακόμα με πραγματική θέση οχήματος.
 
 **Εκκρεμότητες (επιπλέον αυτών της session 5):**
 1. ~~Συγχρονισμός κώδικα με το GitHub~~ — έγινε (pull, 24 Σεπ).
-2. Τρέξε το `export_buildings.py` στο Linux desktop → στείλε το `town10_buildings.json`.
+2. Τρέξε το `town10/export_buildings.py` στο Linux desktop → στείλε το `town10/town10_buildings.json`.
 3. Επιβεβαίωσε την αναστροφή του y: στείλε `vehicle.get_location()` + πού είναι το όχημα στον χάρτη.
 4. Διάλεξε ζώνες θορύβου με βάση τα κτήρια.
 5. **Χρονοδιάγραμμα (δηλώθηκε 24 Σεπ 2026):** υλοποίηση έως **15 Δεκεμβρίου 2026**, συγγραφή έως **15 Ιανουαρίου 2027**. Βλ. πλάνο παρακάτω.
@@ -515,7 +518,7 @@ GOOD PATTERNS from session 2: small step → check understanding → next step. 
 
 ### Δεδομένα κτηρίων (25 Σεπ)
 
-- **Τώρα:** κουτιά από `world.get_environment_objects(Buildings)` → `export_buildings.py` → `town10_buildings.json`. Αρκούν για τις ζώνες θορύβου.
+- **Τώρα:** κουτιά από `world.get_environment_objects(Buildings)` → `town10/export_buildings.py` → `town10/town10_buildings.json`. Αρκούν για τις ζώνες θορύβου.
 - Το `no_rendering_mode.py` **δεν** ζωγραφίζει κτήρια (μόνο δρόμους/λωρίδες/σήματα).
 - **Αργότερα (κτήρια/bearings, ~12/11):** αν τα κουτιά είναι χοντροκομμένα, ακριβή περιγράμματα από κάμερα **instance/semantic segmentation από ψηλά** (+ **depth** για ύψος). Προσοχή στην προοπτική: κάμερα πολύ ψηλά, στενό FOV, πολλές λήψεις σε πλέγμα. Δεν έχει δοκιμαστεί ακόμα.
 
