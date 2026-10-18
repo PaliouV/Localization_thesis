@@ -21,4 +21,4 @@ matlab/whampoa.osm
 gnss_sim/urbannav/
 
 # Τοπικά αρχεία που δεν ανεβαίνουν (αναφορά ελέγχου πηγών, 7 Οκτ 2026)
-GPS_SOURCES_AUDIT.md
+GPS_SOURCES_AUDIT*.md
