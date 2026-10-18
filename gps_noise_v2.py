@@ -1,3 +1,4 @@
+import numpy as np
 STOPPED_BELOW = 0.5
 MOVING_ABOVE = 2.0
     
@@ -150,3 +151,11 @@ def motion_state(speed, previous):
         current_state = "moving"
         return current_state
     else: return previous
+
+
+class GpsNoise:
+    def __init__(self, reciever, seed=None):
+        self.profile = RECEIVERS[reciever]
+        self.state = "stopped"
+        self.rng = np.random.default_rng(seed)
+
