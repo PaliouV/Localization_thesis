@@ -33,16 +33,20 @@ REACQUIRE = (1.0, 5.0)  # s — χωρίς θέση μετά την έξοδο �
 #             (μόνο M8T, μόνο στο "moving": είναι ιδιότητα του δέκτη, χρησιμοποιείται και στη στάση)
 # Κοινά λεξικά = κοινές τιμές, όπου τα δεδομένα δεν δείχνουν διαφορά (αποφάσεις 16 Οκτ 2026).
 
+# F9P: τιμές από calibrate_gps_noise_v2.py (19 Οκτ 2026). Ταιριάζουν στο διάμεσο (±5%)· το μέσο
+# βγαίνει 8–17% μικρότερο (ο πραγματικός έχει λίγο «βαρύτερη ουρά») και το μοντέλο κινείται λίγο
+# περισσότερο σε 1 s και λιγότερο σε 10 s (όριο του απλού Gauss–Markov). Σε στάση, tau = όριο 3600 s:
+# στις σύντομες στάσεις το bias σχεδόν μόνο «γλιστράει».
 F9P_IDENTICAL_ZONES = {
     "stopped" : {
-        "sigma" : None,
-        "tau" : None,
-        "ratio" : None
+        "sigma" : 7.51,
+        "tau" : 3600.0,
+        "ratio" : 1.0
     },
     "moving" : {
-        "sigma" : None,
-        "tau" : None,
-        "ratio" : None
+        "sigma" : 3.20,
+        "tau" : 174.0,
+        "ratio" : 1.18
     }
 }
 
@@ -62,15 +66,15 @@ RECEIVERS = {
         "MODERATE" : F9P_IDENTICAL_ZONES,
         "STRONG" : {
             "stopped" : {
-                "sigma" : None,
-                "tau" : None,
-                "ratio" : None
-                },
-                "moving" : {
-                    "sigma" : None,
-                    "tau" : None,
-                    "ratio" : None
-                    },
+                "sigma" : 1.77,
+                "tau" : 122.0,
+                "ratio" : 1.0
+            },
+            "moving" : {
+                "sigma" : 11.2,
+                "tau" : 197.0,
+                "ratio" : 0.68
+            },
         }
     },
     "m8t" : {
@@ -236,10 +240,13 @@ class GpsNoise:
         # 2. Σκαλοπάτια (μόνο M8T): σπάνιο, απότομο άλμα που ΜΕΝΕΙ μέσα στο bias και σβήνει αργά
         #    μαζί του. Μέγεθος: εκθετική κατανομή με μέσο step_size (ΠΑΡΑΔΟΧΗ το σχήμα της).
         #    Κατεύθυνση: τυχαία, με τον ίδιο λόγο εγκάρσιο / κατά μήκος.
-        if "step_rate" in cell and self.rng.random() < cell["step_rate"] * self.dt:
-            size = self.rng.exponential(cell["step_size"])
-            d = self.rng.standard_normal() * along + cell["ratio"] * self.rng.standard_normal() * cross
-            self.bias = self.bias + size * d / np.linalg.norm(d)
+        #    Οι τυχαίοι αριθμοί τραβιούνται σε ΚΑΘΕ δείγμα (και όταν δεν γίνεται άλμα), ώστε το ίδιο
+        #    seed να δίνει την ίδια σειρά, ό,τι κι αν είναι οι παράμετροι (χρειάζεται για τη ρύθμιση).
+        if "step_rate" in cell:
+            u, unit_size, n_a, n_c = self.rng.random(), self.rng.exponential(), *self.rng.standard_normal(2)
+            if u < cell["step_rate"] * self.dt:
+                d = n_a * along + cell["ratio"] * n_c * cross
+                self.bias = self.bias + cell["step_size"] * unit_size * d / np.linalg.norm(d)
 
         # 3. Καθυστέρηση (μόνο M8T): η θέση του δέκτη «κυνηγάει» την πραγματική με σταθερά χρόνου lag.
         #    Σε σταθερή ταχύτητα v μένει πίσω κατά ~v·lag· σε στάση πλησιάζει σιγά-σιγά την πραγματική.
