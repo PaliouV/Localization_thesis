@@ -91,7 +91,6 @@ writer.writerow(["sim_time", "gt_x", "gt_y", "gt_yaw", "vel", "gps_lat", "gps_lo
 try:
     while True:
         world.tick()
-        world.tick()
         sim_time = world.get_snapshot().timestamp.elapsed_seconds
         t = vehicle.get_transform()
         v = vehicle.get_velocity()
