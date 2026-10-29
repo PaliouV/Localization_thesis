@@ -22,3 +22,6 @@ gnss_sim/urbannav/
 
 # Τοπικά αρχεία που δεν ανεβαίνουν (αναφορά ελέγχου πηγών, 7 Οκτ 2026)
 GPS_SOURCES_AUDIT*.md
+
+# Εικόνες της δοκιμής κάμερας (camera_tilt_test.py) — μόνο για σύγκριση, 82 MB
+camera_tilt_test/
