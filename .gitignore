@@ -25,3 +25,7 @@ GPS_SOURCES_AUDIT*.md
 
 # Εικόνες της δοκιμής κάμερας (camera_tilt_test.py) — μόνο για σύγκριση, 82 MB
 camera_tilt_test/
+
+# Εικόνες καταγραφών (BMW_spawn.py --cameras): ένας φάκελος ανά καταγραφή, δεκάδες GB.
+# Στο git μπαίνουν μόνο τα CSV (drive_*.csv)· οι εικόνες μεταφέρονται αλλιώς (Drive).
+drive_*/
