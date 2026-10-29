@@ -29,3 +29,6 @@ camera_tilt_test/
 # Εικόνες καταγραφών (BMW_spawn.py --cameras): ένας φάκελος ανά καταγραφή, δεκάδες GB.
 # Στο git μπαίνουν μόνο τα CSV (drive_*.csv)· οι εικόνες μεταφέρονται αλλιώς (Drive).
 drive_*/
+
+# Cache του no_rendering_mode.py (CARLA) — ξαναφτιάχνεται μόνο του
+cache/
