@@ -8,7 +8,8 @@
   tau        ↔ πόσο απομακρύνεται το σφάλμα σε 10 s και 60 s (sqrt του variogram ανά άξονα)
   step_rate  ↔ πόσα απότομα άλματα (> 10 m σε 1 s) την ώρα          (μόνο M8T)
   step_size  ↔ μαζί με τα παραπάνω, το μέσο έναντι του διαμέσου      (μόνο M8T)
-  lag        ↔ μέσο ΚΑΤΑ ΜΗΚΟΣ σφάλμα σε κίνηση (πόσο μένει πίσω)    (μόνο M8T)
+  crawl, approach, catchup_rate ↔ μέσο ΚΑΤΑ ΜΗΚΟΣ σφάλμα σε κίνηση (πόσο μένει πίσω), μαζί με
+                        μέσο έναντι διαμέσου και variogram (ράμπες)       (μόνο M8T)
 Ο λόγος εγκάρσιο / κατά μήκος ΔΕΝ ρυθμίζεται: είναι ο μετρημένος (απόφαση 5β). Σε στάση δεν
 μετριέται (δεν υπάρχει «μπρος»), οπότε μπαίνει 1. ΠΑΡΑΔΟΧΗ.
 
@@ -18,8 +19,9 @@
 Καταστάσεις: σταματημένο < 0.5 m/s, κινείται > 2 m/s (ίδια όρια με την ανάλυση).
 
 Βελτιστοποίηση: Nelder–Mead σε λογαριθμική κλίμακα, με σταθερά seeds (ίδιος «τυχαίος» θόρυβος σε
-κάθε δοκιμή, ώστε η σύγκριση παραμέτρων να είναι δίκαιη). Πρώτα η κίνηση με τη στάση σταθερή, μετά η
-στάση με την κίνηση σταθερή, δύο γύροι.
+κάθε δοκιμή, ώστε η σύγκριση παραμέτρων να είναι δίκαιη). Πρώτα κάθε κελί χωριστά (η κίνηση με τη
+στάση σταθερή, μετά η στάση με την κίνηση σταθερή), τρεις γύροι. Στο M8T μετά, από εκεί που έφτασε,
+όλα τα κελιά των ίδιων διαδρομών μαζί (βλ. fit_joint), επίσης τρεις γύροι.
 
     python calibrate_gps_noise_v2.py f9p
     python calibrate_gps_noise_v2.py m8t
@@ -44,8 +46,9 @@ STOPPED, MOVING = gn.STOPPED_BELOW, gn.MOVING_ABOVE
 LAGS = {"stopped": (1, 10), "moving": (1, 10, 60)}   # s — σημεία του variogram που συγκρίνονται
 JUMP = 10.0                                           # m — «απότομο άλμα» σε 1 s
 N_SEEDS = 6
-ROUNDS = 2
-MAXITER = 160
+ROUNDS = 3
+MAXITER = 250
+JOINT_MAXITER = 1500
 RATIO = {"f9p": {"MILD+MOD": 1.18, "STRONG": 0.68},  # μετρημένοι λόγοι σε κίνηση (απόφαση 5β)
          "m8t": {"MILD+MOD": 0.77, "STRONG": 0.66}}
 STOPPED_RATIO = 1.0                                   # ΠΑΡΑΔΟΧΗ: σε στάση δεν μετριέται
@@ -146,7 +149,7 @@ ROUTE_LEVEL = {"medium": "MILD", "deep": "MODERATE", "harsh": "STRONG"}
 def free_params(receiver, state):
     names = ["sigma", "tau"]
     if receiver == "m8t":
-        names += ["step_rate", "step_size"] + (["lag"] if state == "moving" else [])
+        names += ["step_rate", "step_size"] + (["crawl", "approach", "catchup_rate"] if state == "moving" else [])
     return names
 
 
@@ -157,11 +160,11 @@ def targets(receiver, state):
     return names
 
 
-START = {"sigma": 5.0, "tau": 120.0, "step_rate": 1 / 60, "step_size": 30.0, "lag": 5.0}
+START = {"sigma": 5.0, "tau": 120.0, "step_rate": 1 / 120, "step_size": 20.0, "crawl": 0.5, "approach": 0.05, "catchup_rate": 1 / 60}
 # Λογικά όρια. Χωρίς αυτά, στις σύντομες στάσεις η ρύθμιση «ξεφεύγει» σε άπειρο tau με τεράστιο sigma:
 # σε λίγα δευτερόλεπτα το μοντέλο δεν ξεχωρίζει «μεγάλο sigma / τεράστιο tau» από «μικρό sigma / κανονικό tau».
 BOUNDS = {"sigma": (0.1, 1000.0), "tau": (2.0, 3600.0), "step_rate": (1e-5, 0.5), "step_size": (0.5, 1000.0),
-          "lag": (0.1, 120.0)}
+          "crawl": (0.01, 1.0), "approach": (1e-4, 1.0), "catchup_rate": (1e-4, 0.5)}
 
 
 def initial_profile(receiver):
@@ -179,6 +182,20 @@ def initial_profile(receiver):
                 if k != "ratio":
                     cell[k] = START[k]
     return prof
+
+
+def mismatch(s, real_stats, tnames):
+    """Πόσο απέχουν τα στατιστικά του μοντέλου από τα πραγματικά (0 = ίδια)."""
+    err = 0.0
+    for k in tnames:
+        a, b = s[k], real_stats[k]
+        if k == "along":                               # προσημασμένο: απόλυτη διαφορά σε κλίμακα του μέσου
+            err += ((a - b) / max(1.0, real_stats["mean"])) ** 2
+        elif k == "jumps/h":
+            err += (math.log((a + 1) / (b + 1))) ** 2
+        else:
+            err += (math.log(max(a, 1e-6) / max(b, 1e-6))) ** 2
+    return err
 
 
 def fit_block(receiver, prof, data, real_stats, block):
@@ -200,17 +217,7 @@ def fit_block(receiver, prof, data, real_stats, block):
 
     def loss(logv):
         logv = np.clip(logv, lo, hi)
-        s = model_stats(np.exp(logv))
-        err = 0.0
-        for k in tnames:
-            a, b = s[k], real_stats[k]
-            if k == "along":                           # προσημασμένο: απόλυτη διαφορά σε κλίμακα του μέσου
-                err += ((a - b) / max(1.0, real_stats["mean"])) ** 2
-            elif k == "jumps/h":
-                err += (math.log((a + 1) / (b + 1))) ** 2
-            else:
-                err += (math.log(max(a, 1e-6) / max(b, 1e-6))) ** 2
-        return err
+        return mismatch(model_stats(np.exp(logv)), real_stats, tnames)
 
     x0 = np.log([cell[k] for k in params])
     res = minimize(loss, x0, method="Nelder-Mead", options={"maxiter": MAXITER, "xatol": 0.02, "fatol": 1e-4})
@@ -218,6 +225,43 @@ def fit_block(receiver, prof, data, real_stats, block):
     for k, v in zip(params, best):
         cell[k] = float(v)
     return model_stats(best), res.fun
+
+
+# Κοινή ρύθμιση (M8T): στο M8T η καθυστέρηση που μαζεύεται στην κίνηση ΜΕΝΕΙ όταν το όχημα σταματά,
+# οπότε οι τιμές της κίνησης αλλάζουν και το σφάλμα της στάσης. Εδώ όλα τα κελιά που μοιράζονται
+# διαδρομές ρυθμίζονται ΜΑΖΙ, με άθροισμα των αποκλίσεων στάσης και κίνησης.
+JOINT_GROUPS = {"MILD+MOD": ["medium", "deep"], "STRONG": ["harsh"]}
+
+
+def fit_joint(receiver, prof, data, real, plan, group, routes):
+    members = [b for b in plan if b[1] and set(b[1]) <= set(routes)]
+    slots = []                                         # (κελί, όνομα παραμέτρου)
+    for name, rts, levels, state in members:
+        cell = prof[levels[0]][state]
+        slots += [(cell, k) for k in free_params(receiver, state)]
+
+    def model_stats_all(values):
+        for (cell, k), v in zip(slots, values):
+            cell[k] = v
+        series = {rt: [simulate(data[rt], receiver, ROUTE_LEVEL[rt], prof, seed) for seed in range(N_SEEDS)]
+                  for rt in routes}
+        return [stats_multi(data, b[1], {rt: series[rt] for rt in b[1]}, b[3]) for b in members]
+
+    lo = np.log([BOUNDS[k][0] for _, k in slots])
+    hi = np.log([BOUNDS[k][1] for _, k in slots])
+
+    def loss(logv):
+        logv = np.clip(logv, lo, hi)
+        all_s = model_stats_all(np.exp(logv))
+        return sum(mismatch(s, real[b[:1] + (b[3],)], targets(receiver, b[3])) for s, b in zip(all_s, members))
+
+    x0 = np.log([cell[k] for cell, k in slots])
+    res = minimize(loss, x0, method="Nelder-Mead",
+                   options={"maxiter": JOINT_MAXITER, "xatol": 0.02, "fatol": 1e-4, "adaptive": True})
+    best = np.exp(np.clip(res.x, lo, hi))
+    for (cell, k), v in zip(slots, best):
+        cell[k] = float(v)
+    return res.fun
 
 
 def stats_multi(data, routes, series_by_route, state):
@@ -252,6 +296,13 @@ def main():
         for b in plan:
             s, l = fit_block(receiver, prof, data, real[b[:1] + (b[3],)], b)
             print(f"  {b[0]:<9} {b[3]:<8} loss {l:7.4f}")
+
+    if receiver == "m8t":                              # από εκεί που έφτασε η χωριστή ρύθμιση, όλα μαζί
+        for rnd in range(ROUNDS):
+            print(f"\n— κοινή ρύθμιση, γύρος {rnd + 1} —")
+            for group, routes in JOINT_GROUPS.items():
+                l = fit_joint(receiver, prof, data, real, plan, group, routes)
+                print(f"  {group:<9} στάση+κίνηση  loss {l:7.4f}", flush=True)
 
     print(f"\n=== {receiver}: μοντέλο έναντι πραγματικών ===")
     for b in plan:

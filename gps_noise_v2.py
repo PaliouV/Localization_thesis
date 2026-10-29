@@ -3,7 +3,7 @@
 
 Δύο δέκτες οχήματος, με νούμερα από τα πραγματικά δεδομένα του UrbanNav (gnss_sim/):
   "f9p" — σύγχρονος (u-blox F9P): μόνο αργό bias, χωρίς πηδήματα
-  "m8t" — παλιός (u-blox M8T): αργό bias + απότομα σκαλοπάτια + καθυστέρηση («σέρνεται» πίσω)
+  "m8t" — παλιός (u-blox M8T): αργό bias + απότομα σκαλοπάτια + «σέρνεται και προλαβαίνει»
 Το σφάλμα εξαρτάται από τη ζώνη του χάρτη (MILD / MODERATE / STRONG / NO_SIGNAL) και από το
 αν το όχημα είναι σταματημένο ή κινείται.
 
@@ -29,8 +29,10 @@ REACQUIRE = (1.0, 5.0)  # s — χωρίς θέση μετά την έξοδο �
 #   ratio     εγκάρσιο / κατά μήκος (σ)
 #   step_rate σκαλοπάτια ανά δευτερόλεπτο (μόνο M8T)
 #   step_size μέσο μέγεθος σκαλοπατιού (m) (μόνο M8T)
-#   lag       σταθερά χρόνου (s) με την οποία η θέση του δέκτη «κυνηγάει» την πραγματική
-#             (μόνο M8T, μόνο στο "moving": είναι ιδιότητα του δέκτη, χρησιμοποιείται και στη στάση)
+#   crawl         πόσο από την κίνηση του οχήματος ακολουθεί η θέση του δέκτη σε κάθε δείγμα (0–1)
+#   approach      τι μέρος της απόστασης από την πραγματική θέση «κλείνει» σιγά-σιγά σε κάθε δείγμα (0–1)
+#   catchup_rate  πόσες φορές ανά δευτερόλεπτο ο δέκτης «προλαβαίνει» απότομα την πραγματική θέση
+#                 (τα τρία μόνο M8T, μόνο στο "moving": είναι ιδιότητα του δέκτη, ισχύουν και στη στάση)
 # Κοινά λεξικά = κοινές τιμές, όπου τα δεδομένα δεν δείχνουν διαφορά (αποφάσεις 16 Οκτ 2026).
 
 # F9P: τιμές από calibrate_gps_noise_v2.py (19 Οκτ 2026). Ταιριάζουν στο διάμεσο (±5%)· το μέσο
@@ -50,13 +52,20 @@ F9P_IDENTICAL_ZONES = {
     }
 }
 
+# M8T: τιμές από calibrate_gps_noise_v2.py m8t, κοινή ρύθμιση στάσης + κίνησης (19 Οκτ 2026).
+# Σε κίνηση ταιριάζουν το μέσο σφάλμα και το «πόσο μένει πίσω»· η διάμεσος βγαίνει μεγαλύτερη και
+# το σφάλμα αλλάζει λιγότερο από το πραγματικό σε 10–60 s. Σε στάση MODERATE: πολλά περισσότερα
+# άλματα και μικρότερο μέσο. Η στάση MILD δεν κρίνεται (πολύ λίγα δεδομένα στάσης). Στη στάση
+# MODERATE το step_rate είναι στο κάτω όριο: πρακτικά χωρίς σκαλοπάτια.
 M8T_IDENTICAL_MOVING = {
-    "sigma" : None,
-    "tau" : None,
-    "ratio" : None,
-    "step_rate" : None,
-    "step_size" : None,
-    "lag" : None
+    "sigma" : 4.31,
+    "tau" : 128.0,
+    "ratio" : 0.77,
+    "step_rate" : 0.0240,
+    "step_size" : 12.0,
+    "crawl" : 0.439,
+    "approach" : 0.00810,
+    "catchup_rate" : 0.0203
 }
 
 
@@ -80,39 +89,41 @@ RECEIVERS = {
     "m8t" : {
         "MILD" : {
             "stopped" : {
-                "sigma" : None,
-                "tau" : None,
-                "ratio" : None,
-                "step_rate" : None,
-                "step_size" : None
+                "sigma" : 5.77,
+                "tau" : 9.23,
+                "ratio" : 1.0,
+                "step_rate" : 0.000323,
+                "step_size" : 3.52
             },
             "moving" : M8T_IDENTICAL_MOVING,
         },
         "MODERATE" : {
             "stopped" : {
-                "sigma" : None,
-                "tau" : None,
-                "ratio" : None,
-                "step_rate" : None,
-                "step_size" : None
+                "sigma" : 19.4,
+                "tau" : 94.4,
+                "ratio" : 1.0,
+                "step_rate" : 0.00001,
+                "step_size" : 14.9
             },
             "moving" : M8T_IDENTICAL_MOVING,
         },
         "STRONG" : {
             "stopped" : {
-                "sigma" : None,
-                "tau" : None,
-                "ratio" : None,
-                "step_rate" : None,
-                "step_size" : None
+                "sigma" : 13.8,
+                "tau" : 37.2,
+                "ratio" : 1.0,
+                "step_rate" : 0.000566,
+                "step_size" : 29.4
             },
             "moving" : {
-                "sigma" : None,
-                "tau" : None,
-                "ratio" : None,
-                "step_rate" : None,
-                "step_size" : None,
-                "lag" : None
+                "sigma" : 0.677,
+                "tau" : 272.0,
+                "ratio" : 0.66,
+                "step_rate" : 0.0433,
+                "step_size" : 16.2,
+                "crawl" : 0.161,
+                "approach" : 0.00175,
+                "catchup_rate" : 0.00200
             },
         }
     }
@@ -198,7 +209,8 @@ class GpsNoise:
         self.dt = dt
 
         self.bias = np.zeros(2)       # αργό bias σε x/y (m)· εδώ μπαίνουν και τα σκαλοπάτια
-        self.lag_pos = None           # η θέση που «κυνηγάει» την πραγματική (M8T)· None = χωρίς ιστορικό
+        self.lag_pos = None           # η θέση που «σέρνεται» πίσω από την πραγματική (M8T)· None = χωρίς ιστορικό
+        self.prev_truth = None        # πραγματική θέση του προηγούμενου δείγματος (για την κίνηση του οχήματος)
         self.no_fix_left = 0.0        # δευτερόλεπτα που μένουν χωρίς θέση (μετά από NO_SIGNAL)
 
     def step(self, x, y, yaw_deg, speed):
@@ -214,6 +226,7 @@ class GpsNoise:
         if level == "NO_SIGNAL":
             self.no_fix_left = self.rng.uniform(*REACQUIRE)
             self.lag_pos = None
+            self.prev_truth = None
             return None
         if self.no_fix_left > 0:
             self.no_fix_left -= self.dt
@@ -248,17 +261,25 @@ class GpsNoise:
                 d = n_a * along + cell["ratio"] * n_c * cross
                 self.bias = self.bias + cell["step_size"] * unit_size * d / np.linalg.norm(d)
 
-        # 3. Καθυστέρηση (μόνο M8T): η θέση του δέκτη «κυνηγάει» την πραγματική με σταθερά χρόνου lag.
-        #    Σε σταθερή ταχύτητα v μένει πίσω κατά ~v·lag· σε στάση πλησιάζει σιγά-σιγά την πραγματική.
-        lag = self.profile[level]["moving"].get("lag")
-        if lag:
-            if self.lag_pos is None:
+        # 3. «Σέρνεται, πλησιάζει και προλαβαίνει» (μόνο M8T). Όπως στα δεδομένα: η θέση του δέκτη
+        #    ακολουθεί μόνο ένα μέρος (crawl) της κίνησης του οχήματος, οπότε μένει πίσω (ράμπα)· κλείνει
+        #    σιγά-σιγά ένα μέρος (approach) της απόστασης, και έτσι σε στάση πλησιάζει την πραγματική θέση·
+        #    κάπου-κάπου «προλαβαίνει» απότομα (catchup_rate). Ειδικές περιπτώσεις: approach = 0 → μόνο
+        #    ράμπες· crawl = 0 → απλός «αργός ακόλουθος». Ένας τυχαίος αριθμός σε κάθε δείγμα.
+        moving_cell = self.profile[level]["moving"]
+        if "crawl" in moving_cell:
+            catch = self.rng.random()
+            if self.lag_pos is None or self.prev_truth is None:
                 self.lag_pos = truth.copy()
             else:
-                self.lag_pos = self.lag_pos + (1 - math.exp(-self.dt / lag)) * (truth - self.lag_pos)
+                self.lag_pos = (self.lag_pos + moving_cell["crawl"] * (truth - self.prev_truth)
+                                + moving_cell["approach"] * (truth - self.lag_pos))
+                if catch < moving_cell["catchup_rate"] * self.dt:
+                    self.lag_pos = truth.copy()
             base = self.lag_pos
         else:
             base = truth
+        self.prev_truth = truth
 
         fix = base + self.bias
         return fix[0], fix[1]
