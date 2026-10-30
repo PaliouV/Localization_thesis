@@ -1,8 +1,25 @@
+import argparse
+
 import numpy as np
 from filterpy.monte_carlo import multinomial_resample
 from gps_noise_v2 import GpsNoise
 
-data = np.genfromtxt("drive_2026-10-21_13-54-17.csv", delimiter=",", names=True)
+parser = argparse.ArgumentParser()
+parser.add_argument("--receiver", choices=["f9p", "m8t"], default="f9p",
+                    help="ποιος δέκτης GPS: f9p (σύγχρονος) ή m8t (παλιός)")
+args = parser.parse_args()
+
+# Ρυθμίσεις του φίλτρου που εξαρτώνται από τον δέκτη GPS. Είναι αυτό που «πιστεύει» το φίλτρο για το
+# GPS — ΟΧΙ τα νούμερα του gps_noise_v2.py (αυτά είναι ο «πραγματικός κόσμος», που το φίλτρο δεν ξέρει).
+# Νούμερα δοκιμής· τα τελικά είναι ανοιχτή απόφαση.
+SETTINGS = {
+    "f9p": {"pos_sigma": 3, "gps_sigma": 3},      # m
+    "m8t": {"pos_sigma": 50, "gps_sigma": 50},    # m
+}
+
+np.random.seed(0)   # ίδια «ζάρια» σε κάθε τρέξιμο, για να συγκρίνονται οι ρυθμίσεις δίκαια
+
+data =np.genfromtxt("drive_2026-10-21_13-54-17.csv", delimiter=",", names=True)
 # data = np.genfromtxt("drive_2026-09-25_15-07-08.csv", delimiter=",", names=True)
 ## data = np.genfromtxt("drive_2026-09-25_15-19-29.csv", delimiter=",", names=True)
 
@@ -61,11 +78,11 @@ def estimate(particles):
 
 
 
-pos_sigma = 3
+pos_sigma = SETTINGS[args.receiver]["pos_sigma"]
 yaw_sigma_deg = 5
 velocity_sigma = 0.5
 turn_rate_sigma = 0.02
-gps_sigma = 3
+gps_sigma = SETTINGS[args.receiver]["gps_sigma"]
 duration = 0.05
 
 estimates = []
@@ -74,8 +91,7 @@ gps_fixes = []
 
 particles = None
 
-f9p = GpsNoise("f9p", 1)
-# m8t = GpsNoise("m8t", 1)
+receiver = GpsNoise(args.receiver, 1)
 
 for i in range(len(data)):
     velocity = data["vel"][i]
@@ -86,7 +102,7 @@ for i in range(len(data)):
     compass = data["compass"][i]
 
     if i % 20 == 0:
-        fix = f9p.step(gt_x, gt_y, gt_yaw, velocity)
+        fix = receiver.step(gt_x, gt_y, gt_yaw, velocity)
     else:
         fix = None
 
@@ -97,11 +113,33 @@ for i in range(len(data)):
         continue
     particles = predict(particles, velocity, duration, velocity_sigma, turn_rate, turn_rate_sigma)
     if fix is not None:
+        gps_fixes.append((fix[0], fix[1], gt_x, gt_y))
         weights = update(particles, fix[0], fix[1], gps_sigma)
         particles, weights = resample(particles, weights)
     est_x, est_y, est_yaw = estimate(particles)
     estimates.append((est_x, est_y, est_yaw))
     truths.append((gt_x, gt_y, np.radians(gt_yaw)))
+
+estimates = np.array(estimates)
+truths = np.array(truths)
+gps_fixes = np.array(gps_fixes)
+
+#---------filter error------------
+
+diff_x = estimates[:, 0] - truths[:, 0]
+diff_y = estimates[:, 1] - truths[:, 1]
+filter_error = np.sqrt(diff_x**2 + diff_y**2)
+
+#----------gps error---------------
+
+diff_x = gps_fixes[:, 0] - gps_fixes[:, 2]
+diff_y = gps_fixes[:, 1] - gps_fixes[:, 3]
+gps_error = np.sqrt(diff_x**2 + diff_y**2)
+
+#----------print--------------------
+print("δέκτης:", args.receiver)
+print("φίλτρο: μέσο", round(np.mean(filter_error), 2), "m, μέγιστο", round(np.max(filter_error), 2), "m")
+print("gps: μέσο", round(np.mean(gps_error), 2), "m, μέγιστο", round(np.max(gps_error), 2), "m")
 
 
 # particles = create_particles(10, 20, 45, 3, 5, N)
