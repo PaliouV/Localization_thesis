@@ -85,6 +85,22 @@ turn_rate_sigma = 0.02
 gps_sigma = SETTINGS[args.receiver]["gps_sigma"]
 duration = 0.05
 
+# Θόρυβος γυροσκοπίου: ο «κόσμος», ΟΧΙ το φίλτρο (το φίλτρο δεν τα ξέρει αυτά, έχει το δικό του turn_rate_sigma).
+# Xsens MTi-10 (το IMU του UrbanNav), datasheet MTi 10-series σελ. 2:
+#   noise density 0.03 °/s/√Hz      → τυχαίο λάθος σε κάθε μέτρηση στα 20 Hz: 0.03·√20 ≈ 0.13 °/s
+#   in-run bias stability 18 °/h    → bias, ΣΤΑΘΕΡΟ σε όλη τη διαδρομή (απλοποίηση)
+# Το αρχικό bias (0.2 °/s) θεωρούμε ότι αφαιρέθηκε με βαθμονόμηση, με το αυτοκίνητο σταματημένο πριν ξεκινήσει.
+gyro_noise_sigma = np.radians(0.03 * np.sqrt(20))   # rad/s
+gyro_bias_sigma = np.radians(18 / 3600)             # rad/s (18 μοίρες την ώρα → ανά δευτερόλεπτο)
+gyro_bias = np.random.normal(0, gyro_bias_sigma)    # μία φορά, για όλη τη διαδρομή
+
+# Θόρυβος ταχύτητας (αισθητήρες τροχών): επίσης ο «κόσμος», ΟΧΙ το φίλτρο (το φίλτρο έχει το δικό του velocity_sigma).
+# Gao, Petovello & Cannon 2006 (ION NTM), Πίνακας 2 σελ. 7: ακρίβεια wheel speed sensor 5 cm/s,
+# μετρημένη σε πραγματικό αυτοκίνητο, με καταγραφή στα 20 Hz (όπως εμείς).
+# Όταν το αυτοκίνητο στέκεται, ο τροχός δεν γυρίζει, άρα η μέτρηση είναι ακριβώς 0.
+speed_noise_sigma = 0.05    # m/s
+stopped_speed = 0.01        # m/s: κάτω από αυτό θεωρούμε ότι στέκεται (το CARLA τότε δίνει < 0.0001, όχι ακριβώς 0)
+
 estimates = []
 truths = []
 gps_fixes = []
@@ -98,8 +114,14 @@ for i in range(len(data)):
     gt_x = data["gt_x"][i]
     gt_y = data["gt_y"][i]
     gt_yaw = data["gt_yaw"][i]
-    turn_rate = data["gyro_z"][i]
+    turn_rate = data["gyro_z"][i] + gyro_bias + np.random.normal(0, gyro_noise_sigma)   # μετρημένο, όχι τέλειο
     compass = data["compass"][i]
+
+    # Μετρημένη ταχύτητα (για το φίλτρο). Η αληθινή velocity μένει για τον θόρυβο του GPS, που είναι ο «κόσμος».
+    if velocity < stopped_speed:
+        measured_velocity = 0
+    else:
+        measured_velocity = velocity + np.random.normal(0, speed_noise_sigma)
 
     if i % 20 == 0:
         fix = receiver.step(gt_x, gt_y, gt_yaw, velocity)
@@ -111,7 +133,7 @@ for i in range(len(data)):
             yaw_deg = np.degrees(compass) - 90
             particles = create_particles(fix[0], fix[1], yaw_deg, pos_sigma, yaw_sigma_deg, N)
         continue
-    particles = predict(particles, velocity, duration, velocity_sigma, turn_rate, turn_rate_sigma)
+    particles = predict(particles, measured_velocity, duration, velocity_sigma, turn_rate, turn_rate_sigma)
     if fix is not None:
         gps_fixes.append((fix[0], fix[1], gt_x, gt_y))
         weights = update(particles, fix[0], fix[1], gps_sigma)
