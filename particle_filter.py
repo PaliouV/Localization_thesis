@@ -7,31 +7,47 @@ from gps_noise_v2 import GpsNoise
 parser = argparse.ArgumentParser()
 parser.add_argument("--receiver", choices=["f9p", "m8t"], default="f9p",
                     help="ποιος δέκτης GPS: f9p (σύγχρονος) ή m8t (παλιός)")
+parser.add_argument("--csv", default="drive_2026-10-21_13-54-17.csv", help="ποια καταγραφή")
+parser.add_argument("--seed", type=int, default=0,
+                    help="τα «ζάρια» (του φίλτρου ΚΑΙ του θορύβου GPS): ίδιο seed → ίδιο αποτέλεσμα")
+# Για τη ρύθμιση (tune_pf.py): αν δοθούν, αντικαθιστούν τις τιμές του φίλτρου που είναι πιο κάτω.
+parser.add_argument("--gps-sigma", type=float)
+parser.add_argument("--velocity-sigma", type=float)
+parser.add_argument("--turn-rate-sigma", type=float)
 args = parser.parse_args()
 
-# Ρυθμίσεις του φίλτρου που εξαρτώνται από τον δέκτη GPS. Είναι αυτό που «πιστεύει» το φίλτρο για το
-# GPS — ΟΧΙ τα νούμερα του gps_noise_v2.py (αυτά είναι ο «πραγματικός κόσμος», που το φίλτρο δεν ξέρει).
-# Νούμερα δοκιμής· τα τελικά είναι ανοιχτή απόφαση.
+# Ρυθμίσεις του φίλτρου για κάθε δέκτη GPS. Είναι αυτό που «πιστεύει» το φίλτρο για το GPS,
+# ΟΧΙ τα νούμερα του θορύβου (gps_noise_v2.py): αυτά είναι ο «πραγματικός κόσμος», που το φίλτρο δεν ξέρει.
+# gps_sigma: βρέθηκε με το tune_pf.py (2 Νοε 2026, καταγραφή 21 Οκτ). Δοκιμάστηκε και σ που αλλάζει μόνο του
+#   (IAE, Mohamed 1999) και βγήκε χειρότερο, γιατί το λάθος του GPS στην πόλη αλλάζει αργά (Wen et al. 2021).
+# pos_sigma (πόσο απλώνονται τα particles στην αρχή): νούμερο δοκιμής, δεν ρυθμίστηκε.
 SETTINGS = {
-    "f9p": {"pos_sigma": 3, "gps_sigma": 3},      # m
-    "m8t": {"pos_sigma": 50, "gps_sigma": 50},    # m
+    "f9p": {"pos_sigma": 3,  "gps_sigma": 12},    # m
+    "m8t": {"pos_sigma": 50, "gps_sigma": 15},    # m
 }
 
-np.random.seed(0)   # ίδια «ζάρια» σε κάθε τρέξιμο, για να συγκρίνονται οι ρυθμίσεις δίκαια
+# Τι «πιστεύει» το φίλτρο για την ταχύτητα και το γυροσκόπιο. Βγαίνουν από τους ΑΙΣΘΗΤΗΡΕΣ, όχι από ρύθμιση σε
+# μια διαδρομή, γι' αυτό είναι ίδια για κάθε δέκτη και κάθε χάρτη: ο πραγματικός θόρυβος (πηγές πιο κάτω,
+# στον θόρυβο του «κόσμου») επί 2, για περιθώριο ασφαλείας σε ό,τι δεν έχουμε προβλέψει.
+SAFETY = 2
+VELOCITY_SIGMA = SAFETY * 0.05                          # m/s   (wheel speed: Gao 2006)
+TURN_RATE_SIGMA = SAFETY * np.radians(0.03 * np.sqrt(20))   # rad/s (γυροσκόπιο: MTi-10, ≈ 0.0023 → 0.0046)
 
-data =np.genfromtxt("drive_2026-10-21_13-54-17.csv", delimiter=",", names=True)
+np.random.seed(args.seed)   # ίδια «ζάρια» σε κάθε τρέξιμο, για να συγκρίνονται οι ρυθμίσεις δίκαια
+
+data =np.genfromtxt(args.csv, delimiter=",", names=True)
 # data = np.genfromtxt("drive_2026-09-25_15-07-08.csv", delimiter=",", names=True)
 ## data = np.genfromtxt("drive_2026-09-25_15-19-29.csv", delimiter=",", names=True)
 
 
 N = 1000
 
-def create_particles(gps_x, gps_y, yaw_deg, pos_sigma, yaw_sigma_deg, N):
+def create_particles(gps_x, gps_y, pos_sigma, N):
     particles = np.zeros((N, 3))
     xs = np.random.normal(gps_x, pos_sigma, N)
     ys = np.random.normal(gps_y, pos_sigma, N)
-    yaws = np.random.normal(yaw_deg, yaw_sigma_deg, N)
-    yaws = np.radians(yaws)
+    # Χωρίς πυξίδα: κάθε κατεύθυνση εξίσου πιθανή. Το φίλτρο βρίσκει τη σωστή όταν το αυτοκίνητο κινηθεί.
+    yaws = np.random.uniform(0, 2 * np.pi, N)   # rad
 
     particles[:, 0] = xs
     particles[:,1] = ys
@@ -61,6 +77,7 @@ def update(particles, gps_x, gps_y, gps_sigma):
     return weights
 
 
+
 def resample(particles, weights):
     indexes = multinomial_resample(weights)
     particles = particles[indexes]
@@ -79,10 +96,15 @@ def estimate(particles):
 
 
 pos_sigma = SETTINGS[args.receiver]["pos_sigma"]
-yaw_sigma_deg = 5
-velocity_sigma = 0.5
-turn_rate_sigma = 0.02
+velocity_sigma = VELOCITY_SIGMA
+turn_rate_sigma = TURN_RATE_SIGMA
 gps_sigma = SETTINGS[args.receiver]["gps_sigma"]
+if args.gps_sigma is not None:
+    gps_sigma = args.gps_sigma
+if args.velocity_sigma is not None:
+    velocity_sigma = args.velocity_sigma
+if args.turn_rate_sigma is not None:
+    turn_rate_sigma = args.turn_rate_sigma
 duration = 0.05
 
 # Θόρυβος γυροσκοπίου: ο «κόσμος», ΟΧΙ το φίλτρο (το φίλτρο δεν τα ξέρει αυτά, έχει το δικό του turn_rate_sigma).
@@ -107,7 +129,7 @@ gps_fixes = []
 
 particles = None
 
-receiver = GpsNoise(args.receiver, 1)
+receiver = GpsNoise(args.receiver, seed=args.seed)   # ο θόρυβος GPS έχει δικά του «ζάρια», με το ίδιο seed
 
 for i in range(len(data)):
     velocity = data["vel"][i]
@@ -115,7 +137,6 @@ for i in range(len(data)):
     gt_y = data["gt_y"][i]
     gt_yaw = data["gt_yaw"][i]
     turn_rate = data["gyro_z"][i] + gyro_bias + np.random.normal(0, gyro_noise_sigma)   # μετρημένο, όχι τέλειο
-    compass = data["compass"][i]
 
     # Μετρημένη ταχύτητα (για το φίλτρο). Η αληθινή velocity μένει για τον θόρυβο του GPS, που είναι ο «κόσμος».
     if velocity < stopped_speed:
@@ -130,8 +151,7 @@ for i in range(len(data)):
 
     if particles is None:
         if fix is not None:
-            yaw_deg = np.degrees(compass) - 90
-            particles = create_particles(fix[0], fix[1], yaw_deg, pos_sigma, yaw_sigma_deg, N)
+            particles = create_particles(fix[0], fix[1], pos_sigma, N)
         continue
     particles = predict(particles, measured_velocity, duration, velocity_sigma, turn_rate, turn_rate_sigma)
     if fix is not None:
@@ -164,7 +184,7 @@ print("φίλτρο: μέσο", round(np.mean(filter_error), 2), "m, μέγισ�
 print("gps: μέσο", round(np.mean(gps_error), 2), "m, μέγιστο", round(np.max(gps_error), 2), "m")
 
 
-# particles = create_particles(10, 20, 45, 3, 5, N)
+# particles = create_particles(10, 20, 3, N)
 # particles = predict(particles, 5, 1, 0.5, 0.1, 0.02)
 # weights = update(particles, 14, 24, 3)
 # particles, weights =resample(particles, weights)
