@@ -14,6 +14,9 @@ parser.add_argument("--seed", type=int, default=0,
 parser.add_argument("--gps-sigma", type=float)
 parser.add_argument("--velocity-sigma", type=float)
 parser.add_argument("--turn-rate-sigma", type=float)
+parser.add_argument("--show", action="store_true", help="ζωντανή οπτικοποίηση στον χάρτη (pf_view.py)")
+parser.add_argument("--start", type=float, default=0,
+                    help="με --show: από ποιο λεπτό της καταγραφής να αρχίσει να ζωγραφίζει")
 args = parser.parse_args()
 
 # Ρυθμίσεις του φίλτρου για κάθε δέκτη GPS. Είναι αυτό που «πιστεύει» το φίλτρο για το GPS,
@@ -131,6 +134,12 @@ particles = None
 
 receiver = GpsNoise(args.receiver, seed=args.seed)   # ο θόρυβος GPS έχει δικά του «ζάρια», με το ίδιο seed
 
+view = None   # το παράθυρο του --show
+if args.show:
+    from pf_view import open_view, update_view
+    view = open_view(args.receiver)
+last_fix, last_fix_time = None, 0.0   # η τελευταία μέτρηση GPS και πότε ήρθε (για το --show)
+
 for i in range(len(data)):
     velocity = data["vel"][i]
     gt_x = data["gt_x"][i]
@@ -161,6 +170,13 @@ for i in range(len(data)):
     est_x, est_y, est_yaw = estimate(particles)
     estimates.append((est_x, est_y, est_yaw))
     truths.append((gt_x, gt_y, np.radians(gt_yaw)))
+
+    time = data["sim_time"][i] - data["sim_time"][0]   # s από την αρχή της καταγραφής
+    if fix is not None:
+        last_fix, last_fix_time = fix, time
+    if view is not None and time >= args.start * 60:
+        if not update_view(view, particles, (gt_x, gt_y), (est_x, est_y), last_fix, last_fix_time, time):
+            view = None   # έκλεισες το παράθυρο: το φίλτρο συνεχίζει χωρίς ζωγραφική
 
 estimates = np.array(estimates)
 truths = np.array(truths)
