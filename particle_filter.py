@@ -4,7 +4,7 @@ import os
 import numpy as np
 from filterpy.monte_carlo import systematic_resample
 from gps_noise_v2 import GpsNoise
-from lane_camera import FakeLaneCamera
+from lane_camera import DetectorLaneCamera, FakeLaneCamera
 from lane_map import expected_line_distances
 
 parser = argparse.ArgumentParser()
@@ -24,6 +24,10 @@ parser.add_argument("--start", type=float, default=0,
 parser.add_argument("--lanes", action="store_true",
                     help="χρήση της κάμερας λωρίδων (αλλιώς μόνο GPS + γυροσκόπιο + ταχύτητα, όπως πριν)")
 parser.add_argument("--lane-sigma", type=float, help="αντικαθιστά το LANE_SIGMA (πόσο εμπιστεύεται την κάμερα)")
+parser.add_argument("--lane-source", choices=["fake", "detector"], default="fake",
+                    help="με --lanes: fake = ψεύτικη κάμερα από τον χάρτη· detector = το CSV του ανιχνευτή του εργαστηρίου")
+parser.add_argument("--wheel-scale", type=float,
+                    help="σταθερό λάθος κλίμακας της ταχύτητας των τροχών (π.χ. 0.01 = +1%%)· αλλιώς τυχαίο ανά διαδρομή")
 args = parser.parse_args()
 
 # Ρυθμίσεις του φίλτρου για κάθε δέκτη GPS. Είναι αυτό που «πιστεύει» το φίλτρο για το GPS,
@@ -45,8 +49,8 @@ args = parser.parse_args()
 #   στις 30 Οκτ (και 21 Οκτ). Το 5 και το 15 βγήκαν κοντά, με το 5 λίγο καλύτερο, και τα δύο καθαρά καλύτερα
 #   από το 50. Ο M8T σχεδόν δεν ακούει το GPS, άρα μετράει πολύ η αρχή: μαζεμένο σύννεφο γύρω από την πρώτη μέτρηση.
 SETTINGS = {
-    "f9p": {"pos_sigma": 3, "gps_sigma": 12},    # m
-    "m8t": {"pos_sigma": 5, "gps_sigma": 200},   # m
+    "f9p": {"pos_sigma": 3, "gps_sigma": 12, "heading_gate": 0.94},     # m, m, -
+    "m8t": {"pos_sigma": 5, "gps_sigma": 200, "heading_gate": 0.985},   # m, m, -
 }
 
 # Τι «πιστεύει» το φίλτρο για την ταχύτητα και το γυροσκόπιο. Βγαίνουν από τους ΑΙΣΘΗΤΗΡΕΣ, όχι από ρύθμιση σε
@@ -66,10 +70,21 @@ BIAS_TYPICAL = np.radians(18 / 3600)                     # rad/s (in-run bias st
 GYRO_READING_NOISE = np.radians(0.03 * np.sqrt(20))      # rad/s (θόρυβος μίας μέτρησης στα 20 Hz)
 STANDSTILL_WEIGHT = (GYRO_READING_NOISE / BIAS_TYPICAL) ** 2   # = 720 μετρήσεις
 
-# Κάμερα λωρίδων (βήμα 4, 9 Νοε 2026): πόσο λάθος «πιστεύει» το φίλτρο ότι κάνει η απόσταση από τη γραμμή.
-# 0,4 m, όπως στο φίλτρο του Tao 2016 (σ. 141, Πίνακας 5.1). Το πραγματικό λάθος του κόσμου (lane_camera.py) είναι
-# 15 cm + σταθερό έως ±10 cm· το φίλτρο δεν το ξέρει. Θα ρυθμιστεί αργότερα, όπως το gps_sigma.
-LANE_SIGMA = 0.4   # m
+# Κάμερα λωρίδων (9 Νοε 2026). Αρχικά: σ 0,4 m (Tao 2016, σ. 141) και κάθε εικόνα (10 τη στιγμή). Έτσι το φίλτρο
+# χανόταν στα μισά τρεξίματα: εμπιστευόταν πολύ την κάμερα 10 φορές τη στιγμή (διαδοχικές εικόνες λένε σχεδόν το ίδιο,
+# όπως το «διπλομέτρημα» του GPS), και τα particles «στέγνωναν» σε λάθος λωρίδα. Δοκιμές (4 καταγραφές με φανάρια,
+# έλεγχος στις 30 Οκτ) έδωσαν:
+#   LANE_EVERY 20: η κάμερα χρησιμοποιείται 1 φορά τη στιγμή (κάθε 20ό βήμα)
+#   LANE_SIGMA 1,0 m: πόσο λάθος «πιστεύει» το φίλτρο ότι κάνει η απόσταση από τη γραμμή
+#   LANE_JITTER 0,1 m: λίγος θόρυβος στη θέση των particles μετά από κάθε resample της κάμερας, για να μένει ποικιλία
+#     (ιδέα: Χριστοδούλου 2026, τυπ. σ. 31)· ήταν το πιο σημαντικό από τα τρία
+#   heading_gate (στο SETTINGS): η κάμερα χρησιμοποιείται μόνο αφού το φίλτρο βρει την κατεύθυνσή του, δηλαδή όταν
+#     |μέσος όρος των e^(i·yaw)| ≥ heading_gate (0,94 ≈ 20° άπλωμα, 0,985 ≈ 10°). Αλλιώς ένα particle που κοιτάει
+#     ΑΝΑΠΟΔΑ στη διπλανή λωρίδα βλέπει τις ίδιες αποστάσεις, και ο M8T «κλείδωνε» ανάποδα από την αρχή.
+# Το πραγματικό λάθος του κόσμου (lane_camera.py) είναι 15 cm + σταθερό έως ±10 cm· το φίλτρο δεν το ξέρει.
+LANE_SIGMA = 1.0    # m
+LANE_EVERY = 20     # βήματα (20 × 0,05 s = 1 s)
+LANE_JITTER = 0.1   # m
 
 np.random.seed(args.seed)   # ίδια «ζάρια» σε κάθε τρέξιμο, για να συγκρίνονται οι ρυθμίσεις δίκαια
 
@@ -191,6 +206,16 @@ gyro_bias = np.random.normal(0, gyro_bias_sigma)    # μία φορά, για ό
 # Όταν το αυτοκίνητο στέκεται, ο τροχός δεν γυρίζει, άρα η μέτρηση είναι ακριβώς 0.
 speed_noise_sigma = 0.05    # m/s
 stopped_speed = 0.01        # m/s: κάτω από αυτό θεωρούμε ότι στέκεται (το CARLA τότε δίνει < 0.0001, όχι ακριβώς 0)
+# Λάθος κλίμακας (αλλαγή 9 Νοε 2026): μετρημένη = (1 + k) × αληθινή. Η ακτίνα του λάστιχου αλλάζει με τη φθορά, την
+# πίεση, το φορτίο και τη θερμοκρασία, οπότε οι τροχοί μετράνε λίγο λάθος την ταχύτητα. Το k είναι ΣΤΑΘΕΡΟ σε κάθε
+# διαδρομή (Gao 2006, σ. 4: «random constant») και τυχαίο, με τυπική απόκλιση 0,5% (≈95% των διαδρομών μέσα σε ±1%).
+# Πηγές για το μέγεθος (βρέθηκαν 9 Νοε, ⚠️ να ξαναελεγχθούν από εμάς): Carlson 2004 (διδακτορικό, Stanford, Σχ. 2.16
+# σ. 30: φθορά ~0,8%, −20% πίεση ~0,25%, φορτίο ~0,35%)· Stephen 2000 (Calgary, σ. 132: άλλαξε >1% μετά από ρύθμιση
+# πίεσης). Δικά του «ζάρια» ([seed, 4]). Με --wheel-scale δίνεις σταθερή τιμή (για τα πειράματα: 0, ±1%, ±2%).
+if args.wheel_scale is not None:
+    wheel_scale = args.wheel_scale
+else:
+    wheel_scale = np.random.default_rng([args.seed, 4]).normal(0, 0.005)
 
 estimates = []
 truths = []
@@ -204,7 +229,14 @@ receiver = GpsNoise(args.receiver, seed=args.seed, warm_start=True)
 
 # Η κάμερα λωρίδων του «κόσμου» (lane_camera.py): μετράει στην ΑΛΗΘΙΝΗ θέση, με λάθος 15 cm + σταθερό λάθος.
 # Δικά της «ζάρια», με το ίδιο seed. 10 εικόνες τη στιγμή = κάθε 2ο βήμα της καταγραφής (20 Hz).
-camera = FakeLaneCamera(seed=args.seed) if args.lanes else None
+# Με --lane-source detector: οι μετρήσεις του πραγματικού ανιχνευτή (drives/<καταγραφή>_lanes.csv), με το ίδιο λάθος.
+camera = None
+if args.lanes:
+    if args.lane_source == "fake":
+        camera = FakeLaneCamera(seed=args.seed)
+    else:
+        camera = DetectorLaneCamera(csv_path, seed=args.seed)
+heading_gate = SETTINGS[args.receiver]["heading_gate"]
 lane_measurements = 0      # πόσες εικόνες είδαν τουλάχιστον μία γραμμή (για την εκτύπωση στο τέλος)
 lane_images = 0            # πόσες εικόνες συνολικά
 
@@ -227,7 +259,7 @@ for i in range(len(data)):
     if velocity < stopped_speed:
         measured_velocity = 0
     else:
-        measured_velocity = velocity + np.random.normal(0, speed_noise_sigma)
+        measured_velocity = (1 + wheel_scale) * velocity + np.random.normal(0, speed_noise_sigma)
 
     if i % 20 == 0:
         fix = receiver.step(gt_x, gt_y, gt_yaw, velocity)
@@ -251,13 +283,19 @@ for i in range(len(data)):
         gps_fixes.append((fix[0], fix[1], gt_x, gt_y))
         weights = update(particles, fix[0], fix[1], gps_sigma)
         particles, weights = resample(particles, weights)
-    if camera is not None and i % 2 == 0:
-        measured_left, measured_right = camera.measure(gt_x, gt_y, np.radians(gt_yaw))
+    if camera is not None and i % LANE_EVERY == 0:
+        # Η ψεύτικη κάμερα μετράει στην αληθινή θέση (κόσμος)· ο ανιχνευτής χρησιμοποιεί μόνο το frame της εικόνας.
+        frame = int(data["frame"][i]) if "frame" in data.dtype.names else i   # οι καταγραφές πριν τις 30 Οκτ δεν έχουν frame
+        measured_left, measured_right = camera.measure(gt_x, gt_y, np.radians(gt_yaw), frame=frame)
         lane_images += 1
-        if measured_left is not None or measured_right is not None:
+        # Έχει βρει το φίλτρο την κατεύθυνσή του; (πόσο «μαζεμένες» είναι οι κατευθύνσεις των particles)
+        heading_known = np.hypot(np.mean(np.cos(particles[:, 2])), np.mean(np.sin(particles[:, 2]))) >= heading_gate
+        if (measured_left is not None or measured_right is not None) and heading_known:
             lane_measurements += 1
             weights = lane_update(particles, measured_left, measured_right, lane_sigma)
             particles, weights = resample(particles, weights)
+            particles[:, 0] += np.random.normal(0, LANE_JITTER, N)
+            particles[:, 1] += np.random.normal(0, LANE_JITTER, N)
     est_x, est_y, est_yaw = estimate(particles)
     estimates.append((est_x, est_y, est_yaw))
     truths.append((gt_x, gt_y, np.radians(gt_yaw)))
@@ -290,7 +328,7 @@ print("δέκτης:", args.receiver)
 print("φίλτρο: μέσο", round(np.mean(filter_error), 2), "m, μέγιστο", round(np.max(filter_error), 2), "m")
 print("gps: μέσο", round(np.mean(gps_error), 2), "m, μέγιστο", round(np.max(gps_error), 2), "m")
 if camera is not None:
-    print("κάμερα λωρίδων: είδε γραμμή σε", round(100 * lane_measurements / lane_images), "% των εικόνων")
+    print("κάμερα λωρίδων: χρησιμοποιήθηκε σε", round(100 * lane_measurements / lane_images), "% των εικόνων (1 τη στιγμή)")
 
 
 # particles = create_particles(10, 20, 3, N)

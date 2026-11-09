@@ -40,8 +40,9 @@ class FakeLaneCamera:
         self.offset_left = self.rng.uniform(-offset_max, offset_max)
         self.offset_right = self.rng.uniform(-offset_max, offset_max)
 
-    def measure(self, x, y, yaw):
-        """Μία εικόνα. x, y, yaw: η ΑΛΗΘΙΝΗ θέση και κατεύθυνση (yaw σε rad).
+    def measure(self, x, y, yaw, frame=None):
+        """Μία εικόνα. x, y, yaw: η ΑΛΗΘΙΝΗ θέση και κατεύθυνση (yaw σε rad). frame: δεν χρησιμοποιείται εδώ
+        (υπάρχει για να έχει την ίδια μορφή με την DetectorLaneCamera).
         Επιστρέφει (αριστερά m ή None, δεξιά m ή None). None = «δεν είδα γραμμή»."""
         left, right, left_painted, right_painted = expected_line_distances(x, y, yaw)
         # Οι τυχαίοι αριθμοί τραβιούνται σε ΚΑΘΕ εικόνα, για να μένει ίδια η σειρά τους ό,τι κι αν βγει
@@ -54,6 +55,47 @@ class FakeLaneCamera:
             measured_left = None
         if not right_painted or lost_right:
             measured_right = None
+        return measured_left, measured_right
+
+
+class DetectorLaneCamera:
+    """Η κάμερα λωρίδων από τον ΠΡΑΓΜΑΤΙΚΟ ανιχνευτή (lane_detector.py, στο εργαστήριο, από τη semantic κάμερα).
+    Διαβάζει το drives/<καταγραφή>_lanes.csv: για κάθε εικόνα (frame), την απόσταση από την αριστερή και τη δεξιά
+    γραμμή και αν τις είδε. Ο ανιχνευτής δίνει «τέλειες» μετρήσεις, οπότε εδώ, στο Mac, προστίθεται το ΙΔΙΟ λάθος
+    με την FakeLaneCamera (15 cm + σταθερό έως ±10 cm + προαιρετικές επιπλέον απώλειες, απόφαση 9 Νοε 2026).
+    «Δεν είδα» = ό,τι δεν είδε ο ανιχνευτής (διασταυρώσεις, αυτοκίνητα μπροστά, βέλη, διαβάσεις κ.λπ.)."""
+
+    def __init__(self, drive_csv_path, seed=None, noise_sigma=0.15, offset_max=0.10, extra_loss=0.0):
+        lanes_path = drive_csv_path[:-len(".csv")] + "_lanes.csv"
+        det = np.genfromtxt(lanes_path, delimiter=",", names=True)
+        # frame → (αριστερά, δεξιά), με None όπου ο ανιχνευτής δεν είδε γραμμή
+        self.by_frame = {}
+        for row in det:
+            left = float(row["left_dist"]) if row["left_ok"] == 1 else None
+            right = float(row["right_dist"]) if row["right_ok"] == 1 else None
+            self.by_frame[int(row["frame"])] = (left, right)
+        # Ίδια «ζάρια» και ίδιο λάθος με την FakeLaneCamera
+        self.rng = np.random.default_rng(None if seed is None else [seed, 2])
+        self.noise_sigma = noise_sigma
+        self.extra_loss = extra_loss
+        self.offset_left = self.rng.uniform(-offset_max, offset_max)
+        self.offset_right = self.rng.uniform(-offset_max, offset_max)
+
+    def measure(self, x, y, yaw, frame=None):
+        """Μία εικόνα: η μέτρηση του ανιχνευτή στο frame (ή στο διπλανό: η κάμερα βγάζει εικόνα κάθε 2ο βήμα).
+        x, y, yaw ΔΕΝ χρησιμοποιούνται (ο ανιχνευτής δεν ξέρει την αλήθεια). Επιστρέφει (αριστερά ή None, δεξιά ή None)."""
+        found = None
+        for f in (frame, frame + 1, frame - 1):
+            if f in self.by_frame:
+                found = self.by_frame[f]
+                break
+        noise_left, noise_right = self.rng.normal(0, self.noise_sigma, 2)
+        lost_left, lost_right = self.rng.random(2) < self.extra_loss
+        if found is None:
+            return None, None
+        left, right = found
+        measured_left = None if (left is None or lost_left) else left + self.offset_left + noise_left
+        measured_right = None if (right is None or lost_right) else right + self.offset_right + noise_right
         return measured_left, measured_right
 
 
