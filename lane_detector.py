@@ -16,7 +16,8 @@
 Βγάζει ΤΕΛΕΙΕΣ μετρήσεις (χωρίς επιπλέον λάθος): το λάθος 15 cm και οι απώλειες μπαίνουν στο Mac (απόφαση 9 Νοε).
 
 Αποτέλεσμα: drives/<καταγραφή>_lanes.csv, μία γραμμή ανά εικόνα:
-  frame, left_dist, left_angle_deg, left_points, left_ok, right_dist, right_angle_deg, right_points, right_ok
+  frame, left_dist, left_angle_deg, left_points, left_ok, right_dist, right_angle_deg, right_points, right_ok,
+  left_curv, right_curv (c2 της καμπύλης, 1/m: μόνο για τις εικόνες ελέγχου· προστέθηκε 9 Νοε 2026)
   (dist σε m, πάντα θετική· angle σε μοίρες, θετική = η λωρίδα στρίβει προς τα δεξιά του αυτοκινήτου)
 
 Χρήση (από τον φάκελο του repo, στο εργαστήριο):
@@ -72,8 +73,12 @@ def geometry_from_carla():
         raise RuntimeError("Δεν μπόρεσα να φτιάξω το αυτοκίνητο σε κανένα spawn point.")
     box = vehicle.bounding_box
     vehicle.destroy()
+    # Ύψος της κάμερας ΠΑΝΩ ΑΠΟ ΤΟΝ ΔΡΟΜΟ: roof_z του BMW_spawn.py (box.location.z + box.extent.z + 0.05, μετρημένο από
+    # το σημείο αναφοράς του αυτοκινήτου) συν την απόσταση σημείου αναφοράς–δρόμου (box.extent.z − box.location.z: το
+    # κάτω μέρος του αυτοκινήτου είναι ~7 cm κάτω από το σημείο αναφοράς). Άρα 2·extent.z + 0.05 = 1,717 m.
+    # Διορθώθηκε 9 Νοε 2026: με το ύψος από το σημείο αναφοράς (1,649 m) το πλάτος λωρίδας έβγαινε 3,375 αντί 3,5 m.
     geometry = {
-        "height": box.location.z + box.extent.z + 0.05,      # roof_z του BMW_spawn.py (από το σημείο αναφοράς)
+        "height": 2 * box.extent.z + 0.05,
         "forward": box.location.x + 0.25 * box.extent.x,     # POS["front"] του BMW_spawn.py
         "box": [box.location.x, box.location.y, box.location.z, box.extent.x, box.extent.y, box.extent.z],
     }
@@ -127,7 +132,7 @@ def fit_line(x, y, rng):
         return None
     c2, c1, c0 = np.polyfit(x[best], y[best], 2)    # τελική καμπύλη: μόνο με τα σημεία που ταιριάζουν
     length = x[best].max() - x[best].min()
-    return c0, c1, int(best.sum()), length
+    return c0, c1, int(best.sum()), length, c2
 
 
 def detect(tags, height, forward, rng):
@@ -145,20 +150,21 @@ def detect(tags, height, forward, rng):
         ok = False
         dist = angle = np.nan
         points = 0
+        curv = 0.0
         if fit is not None:
-            c0, c1, points, length = fit
+            c0, c1, points, length, curv = fit
             dist = sign * c0                             # απόσταση στο σημείο αναφοράς (θετική)
             angle = np.degrees(np.arctan(c1))
             ok = length >= MIN_LENGTH and abs(angle) <= MAX_ANGLE_DEG and SIDE_MIN <= dist <= SIDE_MAX
-        result[side] = (dist, angle, points, ok)
+        result[side] = (dist, angle, points, ok, curv)
 
     # Με δύο γραμμές: το πλάτος της λωρίδας πρέπει να είναι λογικό, αλλιώς μάλλον μία από τις δύο είναι λάθος
     # (π.χ. ρίγα διάβασης πεζών). Δεν ξέρουμε ποια, οπότε δεν κρατάμε καμία.
     if result["left"][3] and result["right"][3]:
         width = result["left"][0] + result["right"][0]
         if not (LANE_WIDTH_RANGE[0] <= width <= LANE_WIDTH_RANGE[1]):
-            result["left"] = result["left"][:3] + (False,)
-            result["right"] = result["right"][:3] + (False,)
+            result["left"] = result["left"][:3] + (False,) + result["left"][4:]
+            result["right"] = result["right"][:3] + (False,) + result["right"][4:]
     return result
 
 
@@ -169,7 +175,8 @@ def process(job):
     r = detect(tags, height, forward, rng)
     frame = int(os.path.basename(path).split(".")[0])
     return [frame] + [r["left"][0], r["left"][1], r["left"][2], int(r["left"][3]),
-                      r["right"][0], r["right"][1], r["right"][2], int(r["right"][3])]
+                      r["right"][0], r["right"][1], r["right"][2], int(r["right"][3]),
+                      r["left"][4], r["right"][4]]
 
 
 def debug_image(path, row, height, forward, out_path):
@@ -181,12 +188,13 @@ def debug_image(path, row, height, forward, out_path):
     for x_cam in (NEAR, FAR):
         v = int(CY + FOCAL * height / x_cam)
         cv2.line(img, (0, v), (WIDTH - 1, v), (0, 200, 255), 1)
-    _, l_dist, l_ang, _, l_ok, r_dist, r_ang, _, r_ok = row
-    for dist, ang, ok, sign, color in [(l_dist, l_ang, l_ok, -1, (0, 0, 255)), (r_dist, r_ang, r_ok, +1, (255, 0, 0))]:
+    _, l_dist, l_ang, _, l_ok, r_dist, r_ang, _, r_ok, l_curv, r_curv = row
+    for dist, ang, ok, curv, sign, color in [(l_dist, l_ang, l_ok, l_curv, -1, (0, 0, 255)),
+                                             (r_dist, r_ang, r_ok, r_curv, +1, (255, 0, 0))]:
         if not ok:
             continue
         xs = np.linspace(forward + NEAR, forward + FAR, 30)
-        ys = sign * dist + np.tan(np.radians(ang)) * xs        # (χωρίς την καμπυλότητα: μόνο για να φαίνεται)
+        ys = sign * dist + np.tan(np.radians(ang)) * xs + curv * xs ** 2   # η καμπύλη όπως την ταίριαξε (και στις στροφές)
         u, v = ground_to_pixels(xs, ys, height, forward)
         pts = np.stack([u, v], axis=1).astype(np.int32)
         cv2.polylines(img, [pts], False, color, 3)
@@ -233,7 +241,7 @@ def main():
     with open(out, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["frame", "left_dist", "left_angle_deg", "left_points", "left_ok",
-                    "right_dist", "right_angle_deg", "right_points", "right_ok"])
+                    "right_dist", "right_angle_deg", "right_points", "right_ok", "left_curv", "right_curv"])
         for r in rows:
             w.writerow([r[0]] + [f"{v:.4f}" if isinstance(v, float) else v for v in r[1:]])
     rows_arr = np.array([[r[4], r[8], r[1] + r[5] if (r[4] and r[8]) else np.nan] for r in rows], dtype=float)
