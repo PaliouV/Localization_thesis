@@ -122,8 +122,12 @@ if args.cameras:
             cameras.append((name, kind, cam, q))
 
 
-csv_name = time.strftime("drive_%Y-%m-%d_%H-%M-%S.csv")   # π.χ. drive_2026-09-24_18-05-12.csv
+# Οι καταγραφές γράφονται στον φάκελο drives/ (από 9 Νοε 2026), μαζί με τους φακέλους των εικόνων τους.
+DRIVES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drives")
+os.makedirs(DRIVES_DIR, exist_ok=True)
+csv_name = os.path.join(DRIVES_DIR, time.strftime("drive_%Y-%m-%d_%H-%M-%S.csv"))   # π.χ. drives/drive_2026-09-24_18-05-12.csv
 csv_file = open(csv_name, "w", newline="")
+print("Καταγραφή στο:", csv_name)
 writer = csv.writer (csv_file)
 writer.writerow(["frame", "sim_time", "gt_x", "gt_y", "gt_yaw", "vel", "gps_lat", "gps_lon", "gps_alt", "acc_x",
                  "acc_y", "acc_z", "gyro_x", "gyro_y", "gyro_z", "compass"])

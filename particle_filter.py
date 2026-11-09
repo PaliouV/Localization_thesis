@@ -1,4 +1,5 @@
 import argparse
+import os
 
 import numpy as np
 from filterpy.monte_carlo import systematic_resample
@@ -62,9 +63,11 @@ STANDSTILL_WEIGHT = (GYRO_READING_NOISE / BIAS_TYPICAL) ** 2   # = 720 μετρ�
 
 np.random.seed(args.seed)   # ίδια «ζάρια» σε κάθε τρέξιμο, για να συγκρίνονται οι ρυθμίσεις δίκαια
 
-data =np.genfromtxt(args.csv, delimiter=",", names=True)
-# data = np.genfromtxt("drive_2026-09-25_15-07-08.csv", delimiter=",", names=True)
-## data = np.genfromtxt("drive_2026-09-25_15-19-29.csv", delimiter=",", names=True)
+# Οι καταγραφές είναι στον φάκελο drives/ (από 9 Νοε 2026). Με --csv δίνεις μόνο το όνομα της καταγραφής·
+# αν δώσεις ολόκληρη διαδρομή αρχείου που υπάρχει, χρησιμοποιείται αυτή.
+DRIVES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drives")
+csv_path = args.csv if os.path.exists(args.csv) else os.path.join(DRIVES_DIR, args.csv)
+data = np.genfromtxt(csv_path, delimiter=",", names=True)
 
 
 N = 1000
