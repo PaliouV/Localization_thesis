@@ -12,6 +12,8 @@ import queue
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--cameras", action="store_true", help="CAMERAS MALAKA")
+parser.add_argument("--minutes", type=float, default=None,
+                    help="σταματάει μόνο του μετά από τόσα λεπτά προσομοίωσης (χωρίς αυτό: μέχρι το Ctrl+C)")
 args = parser.parse_args()
 if args.cameras:
     print("BROKOLOKO EVALES KAMERA")
@@ -146,11 +148,17 @@ def save_images():
                 tags = np.ascontiguousarray(pixels[:, :, 2])
                 cv2.imwrite(os.path.join(folder, f"{image.frame}.png"), tags)
 
+start_time = None                                         # χρόνος προσομοίωσης στην αρχή (για το --minutes)
 try:
     while True:
         frame = world.tick()
         save_images()                                     # χωρίς --cameras η λίστα είναι άδεια: δεν κάνει τίποτα
         sim_time = world.get_snapshot().timestamp.elapsed_seconds
+        if start_time is None:
+            start_time = sim_time
+        if args.minutes is not None and sim_time - start_time >= args.minutes * 60:
+            print(f"\nΤέλος: {args.minutes} λεπτά προσομοίωσης.")
+            break                                         # το finally κάνει το καθάρισμα, όπως με το Ctrl+C
         t = vehicle.get_transform()
         v = vehicle.get_velocity()
         speed = math.sqrt(v.x**2 + v.y**2 + v.z**2)

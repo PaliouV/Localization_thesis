@@ -31,3 +31,10 @@ review_notes.md
 
 # Σημειώσεις αποτελεσμάτων του φίλτρου μόνο με αισθητήρες (προσωπικές, μόνο στο Mac)
 pf_sensors_only_notes/
+
+# Εικόνες καταγραφών (BMW_spawn.py --cameras): ένας φάκελος ανά καταγραφή, δεκάδες GB.
+# Στο git μπαίνουν μόνο τα CSV (drive_*.csv)· οι εικόνες μεταφέρονται αλλιώς (Drive).
+drive_*/
+
+# Cache του no_rendering_mode.py (CARLA) — ξαναφτιάχνεται μόνο του
+cache/
