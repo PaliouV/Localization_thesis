@@ -11,13 +11,15 @@
      π.χ. βέλη· καμπύλη και όχι ευθεία, για τις στροφές).
      c0 = πλάγια απόσταση της γραμμής στο ΣΗΜΕΙΟ ΑΝΑΦΟΡΑΣ του αυτοκινήτου (εκεί που είναι τα gt_x, gt_y)·
      c1 = κλίση στο σημείο αναφοράς → γωνία της λωρίδας ως προς το αυτοκίνητο.
-  5. «Δεν είδα» αν: λίγα σημεία, πολύ μικρό μήκος, παράλογη γωνία, ή (με δύο γραμμές) πλάτος λωρίδας εκτός 3–4 m
-     (π.χ. διαβάσεις πεζών, που είναι κι αυτές ετικέτα 24).
+  5. Βρίσκει ΟΛΕΣ τις παράλληλες γραμμές της πλευράς: διπλή γραμμή → η μέση της· 3+ ρίγες (διάβαση) → «δεν είδα».
+  6. «Δεν είδα» αν: λίγα σημεία, πολύ μικρό μήκος, παράλογη γωνία, ή (με δύο γραμμές) πλάτος λωρίδας εκτός 3–4 m.
+     Η γωνία σημειώνεται «ok» μόνο αν η γραμμή απλώνεται τουλάχιστον 8 m.
 Βγάζει ΤΕΛΕΙΕΣ μετρήσεις (χωρίς επιπλέον λάθος): το λάθος 15 cm και οι απώλειες μπαίνουν στο Mac (απόφαση 9 Νοε).
 
 Αποτέλεσμα: drives/<καταγραφή>_lanes.csv, μία γραμμή ανά εικόνα:
   frame, left_dist, left_angle_deg, left_points, left_ok, right_dist, right_angle_deg, right_points, right_ok,
-  left_curv, right_curv (c2 της καμπύλης, 1/m: μόνο για τις εικόνες ελέγχου· προστέθηκε 9 Νοε 2026)
+  left_curv, right_curv (c2 της καμπύλης, 1/m: μόνο για τις εικόνες ελέγχου· προστέθηκε 9 Νοε 2026),
+  left_kind, right_kind (0 αμφίσημο, 1 μία γραμμή, 2 διπλή → η μέση της, 3 πολλές ρίγες/διάβαση), left_angle_ok, right_angle_ok
   (dist σε m, πάντα θετική· angle σε μοίρες, θετική = η λωρίδα στρίβει προς τα δεξιά του αυτοκινήτου)
 
 Χρήση (από τον φάκελο του repo, στο εργαστήριο):
@@ -51,6 +53,7 @@ SIDE_MIN, SIDE_MAX = 0.5, 3.5   # m στο πλάι: εδώ περιμένουμ
 MIN_POINTS = 150                # ελάχιστα pixels γραμμής για να πιστέψουμε ότι είδαμε γραμμή
 MIN_LENGTH = 4.0                # m: η γραμμή πρέπει να απλώνεται τουλάχιστον τόσο μπροστά-πίσω
 MAX_ANGLE_DEG = 30              # γραμμή πιο στραβή από αυτό δεν είναι γραμμή της λωρίδας μας (π.χ. γραμμή στοπ)
+MIN_ANGLE_LENGTH = 8.0          # m: για να εμπιστευτούμε τη ΓΩΝΙΑ, η γραμμή πρέπει να απλώνεται τόσο (9 Νοε 2026)
 RANSAC_TOL = 0.15               # m: ένα σημείο «ταιριάζει» στην ευθεία αν απέχει λιγότερο από αυτό
 LANE_WIDTH_RANGE = (3.0, 4.0)   # m: με δύο γραμμές, το πλάτος πρέπει να είναι λογικό (στο Town10 είναι 3,5)
 
@@ -135,8 +138,52 @@ def fit_line(x, y, rng):
     return c0, c1, int(best.sum()), length, c2
 
 
+def find_lines(x, y, rng, max_lines=4):
+    """Όλες οι ξεχωριστές γραμμές στα σημεία μιας πλευράς (μέχρι max_lines): βρίσκει την πιο «γεμάτη» με RANSAC,
+    βγάζει τα σημεία της, ξαναψάχνει. Επιστρέφει λίστα από (c0, c1, πόσα σημεία, μήκος, c2)."""
+    lines = []
+    remaining = np.ones(len(x), bool)
+    for _ in range(max_lines):
+        if remaining.sum() < MIN_POINTS:
+            break
+        fit = fit_line(x[remaining], y[remaining], rng)
+        if fit is None:
+            break
+        lines.append(fit)
+        c0, c1, _, _, c2 = fit
+        remaining &= np.abs(y - (c0 + c1 * x + c2 * x ** 2)) >= 2 * RANSAC_TOL   # βγάζουμε τα σημεία της (και το πάχος της)
+    return lines
+
+
+def choose_line(lines):
+    """Από τις γραμμές μιας πλευράς, ποια είναι η γραμμή της λωρίδας μας (διόρθωση 9 Νοε 2026).
+    Κρατάμε μόνο «σωστές» γραμμές (αρκετά μακριές, όχι πολύ στραβές) που είναι ΠΑΡΑΛΛΗΛΕΣ με την πιο γεμάτη. Μετά:
+      1 γραμμή                         → αυτή                                          (είδος 1)
+      2 γραμμές, 0,3–1,5 m η μία από την άλλη → ΔΙΠΛΗ γραμμή: η ΜΕΣΗ τους, γιατί εκεί βάζει ο χάρτης το όριο (είδος 2)
+                                         (πριν: έπιανε τη μία από τις δύο → λάθος ±0,45 m στο 74% των διπλών γραμμών)
+      2 γραμμές πιο μακριά η μία από την άλλη → δεν ξέρουμε ποια είναι η δική μας → «δεν είδα»     (είδος 0)
+      3 ή περισσότερες                → πολλές παράλληλες ρίγες = μάλλον διάβαση πεζών → «δεν είδα»   (είδος 3)
+    Επιστρέφει (c0, c1, πόσα σημεία, μήκος, c2, είδος) ή None."""
+    good = [f for f in lines if f[3] >= MIN_LENGTH and abs(np.degrees(np.arctan(f[1]))) <= MAX_ANGLE_DEG]
+    if not good:
+        return None
+    main = max(good, key=lambda f: f[2])
+    parallel = [f for f in good if abs(f[1] - main[1]) < 0.05 and abs(f[4] - main[4]) < 0.02]
+    if len(parallel) == 1:
+        return main + (1,)
+    if len(parallel) >= 3:
+        return main + (3,)
+    a, b = parallel
+    separation = abs(a[0] - b[0])
+    if 0.3 <= separation <= 1.5:
+        mid = tuple((a[k] + b[k]) / 2 for k in (0, 1)) + (a[2] + b[2], max(a[3], b[3]), (a[4] + b[4]) / 2, 2)
+        return mid
+    return main + (0,)
+
+
 def detect(tags, height, forward, rng):
-    """Μία εικόνα (πίνακας με ετικέτες) → dict με τις μετρήσεις αριστερά και δεξιά."""
+    """Μία εικόνα (πίνακας με ετικέτες) → dict με τις μετρήσεις αριστερά και δεξιά:
+    (απόσταση, γωνία, σημεία, ok, c2, είδος γραμμής, γωνία ok)."""
     v, u = np.nonzero(tags == ROAD_LINE)
     keep = v > CY + 1
     x, y, x_cam = pixels_to_ground(u[keep].astype(float), v[keep].astype(float), height, forward)
@@ -146,25 +193,28 @@ def detect(tags, height, forward, rng):
     result = {}
     for side, sign in [("left", -1), ("right", +1)]:     # αριστερά: y < 0, δεξιά: y > 0
         band = (sign * y >= SIDE_MIN) & (sign * y <= SIDE_MAX)
-        fit = fit_line(x[band], y[band], rng)
-        ok = False
+        line = choose_line(find_lines(x[band], y[band], rng))
+        ok = angle_ok = False
         dist = angle = np.nan
-        points = 0
+        points = kind = 0
         curv = 0.0
-        if fit is not None:
-            c0, c1, points, length, curv = fit
+        if line is not None:
+            c0, c1, points, length, curv, kind = line
             dist = sign * c0                             # απόσταση στο σημείο αναφοράς (θετική)
             angle = np.degrees(np.arctan(c1))
-            ok = length >= MIN_LENGTH and abs(angle) <= MAX_ANGLE_DEG and SIDE_MIN <= dist <= SIDE_MAX
-        result[side] = (dist, angle, points, ok, curv)
+            ok = kind in (1, 2) and SIDE_MIN <= dist <= SIDE_MAX
+            # Η γωνία θέλει μακρύτερη γραμμή από την απόσταση: με λίγα μέτρα, μικρά λάθη στα σημεία τη «γέρνουν»
+            angle_ok = ok and length >= MIN_ANGLE_LENGTH
+        result[side] = (dist, angle, points, ok, curv, kind, angle_ok)
 
     # Με δύο γραμμές: το πλάτος της λωρίδας πρέπει να είναι λογικό, αλλιώς μάλλον μία από τις δύο είναι λάθος
     # (π.χ. ρίγα διάβασης πεζών). Δεν ξέρουμε ποια, οπότε δεν κρατάμε καμία.
     if result["left"][3] and result["right"][3]:
         width = result["left"][0] + result["right"][0]
         if not (LANE_WIDTH_RANGE[0] <= width <= LANE_WIDTH_RANGE[1]):
-            result["left"] = result["left"][:3] + (False,) + result["left"][4:]
-            result["right"] = result["right"][:3] + (False,) + result["right"][4:]
+            for s in ("left", "right"):
+                r = result[s]
+                result[s] = r[:3] + (False,) + r[4:6] + (False,)
     return result
 
 
@@ -176,7 +226,8 @@ def process(job):
     frame = int(os.path.basename(path).split(".")[0])
     return [frame] + [r["left"][0], r["left"][1], r["left"][2], int(r["left"][3]),
                       r["right"][0], r["right"][1], r["right"][2], int(r["right"][3]),
-                      r["left"][4], r["right"][4]]
+                      r["left"][4], r["right"][4],
+                      r["left"][5], r["right"][5], int(r["left"][6]), int(r["right"][6])]
 
 
 def debug_image(path, row, height, forward, out_path):
@@ -188,7 +239,7 @@ def debug_image(path, row, height, forward, out_path):
     for x_cam in (NEAR, FAR):
         v = int(CY + FOCAL * height / x_cam)
         cv2.line(img, (0, v), (WIDTH - 1, v), (0, 200, 255), 1)
-    _, l_dist, l_ang, _, l_ok, r_dist, r_ang, _, r_ok, l_curv, r_curv = row
+    _, l_dist, l_ang, _, l_ok, r_dist, r_ang, _, r_ok, l_curv, r_curv = row[:11]
     for dist, ang, ok, curv, sign, color in [(l_dist, l_ang, l_ok, l_curv, -1, (0, 0, 255)),
                                              (r_dist, r_ang, r_ok, r_curv, +1, (255, 0, 0))]:
         if not ok:
@@ -241,7 +292,8 @@ def main():
     with open(out, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["frame", "left_dist", "left_angle_deg", "left_points", "left_ok",
-                    "right_dist", "right_angle_deg", "right_points", "right_ok", "left_curv", "right_curv"])
+                    "right_dist", "right_angle_deg", "right_points", "right_ok", "left_curv", "right_curv",
+                    "left_kind", "right_kind", "left_angle_ok", "right_angle_ok"])
         for r in rows:
             w.writerow([r[0]] + [f"{v:.4f}" if isinstance(v, float) else v for v in r[1:]])
     rows_arr = np.array([[r[4], r[8], r[1] + r[5] if (r[4] and r[8]) else np.nan] for r in rows], dtype=float)
