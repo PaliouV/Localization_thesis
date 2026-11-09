@@ -1,0 +1,257 @@
+"""
+Ανιχνευτής λωρίδων από τη semantic κάμερα («μέση οδός», 7–9 Νοε 2026). Τρέχει στο PC του εργαστηρίου,
+όπου είναι οι εικόνες. Χρειάζεται μόνο numpy και cv2 (και carla μόνο για το --from-carla).
+
+Τι κάνει, για κάθε εικόνα της ΜΠΡΟΣΤΙΝΗΣ semantic κάμερας (10 τη στιγμή):
+  1. Κρατάει τα pixels με ετικέτα 24 (RoadLine: «οι βαφές του δρόμου»).
+  2. Τα μεταφέρει στο έδαφος: κάμερα με γνωστό ύψος, κλίση 0°, οπτικό πεδίο 90°, δρόμος επίπεδος.
+     Κάθε pixel → σημείο «Χ m μπροστά, Υ m δεξιά» από το αυτοκίνητο.
+  3. Κρατάει τα σημεία 3–15 m μπροστά από την κάμερα, αριστερά και δεξιά του αυτοκινήτου (0,5–3,5 m στο πλάι).
+  4. Σε κάθε πλευρά ταιριάζει μια καμπύλη Υ = c0 + c1·Χ + c2·Χ² (RANSAC: αγνοεί τα σημεία που δεν ταιριάζουν,
+     π.χ. βέλη· καμπύλη και όχι ευθεία, για τις στροφές).
+     c0 = πλάγια απόσταση της γραμμής στο ΣΗΜΕΙΟ ΑΝΑΦΟΡΑΣ του αυτοκινήτου (εκεί που είναι τα gt_x, gt_y)·
+     c1 = κλίση στο σημείο αναφοράς → γωνία της λωρίδας ως προς το αυτοκίνητο.
+  5. «Δεν είδα» αν: λίγα σημεία, πολύ μικρό μήκος, παράλογη γωνία, ή (με δύο γραμμές) πλάτος λωρίδας εκτός 3–4 m
+     (π.χ. διαβάσεις πεζών, που είναι κι αυτές ετικέτα 24).
+Βγάζει ΤΕΛΕΙΕΣ μετρήσεις (χωρίς επιπλέον λάθος): το λάθος 15 cm και οι απώλειες μπαίνουν στο Mac (απόφαση 9 Νοε).
+
+Αποτέλεσμα: drives/<καταγραφή>_lanes.csv, μία γραμμή ανά εικόνα:
+  frame, left_dist, left_angle_deg, left_points, left_ok, right_dist, right_angle_deg, right_points, right_ok
+  (dist σε m, πάντα θετική· angle σε μοίρες, θετική = η λωρίδα στρίβει προς τα δεξιά του αυτοκινήτου)
+
+Χρήση (από τον φάκελο του repo, στο εργαστήριο):
+    ~/carla-env/bin/python lane_detector.py --from-carla               (μία φορά: γεωμετρία κάμερας από το CARLA)
+    ~/carla-env/bin/python lane_detector.py drive_2026-10-30_20-45-55 --debug 30
+    ~/carla-env/bin/python lane_detector.py drive_2026-10-30_21-24-29 --debug 30
+--debug N: σώζει και N εικόνες ελέγχου (οι γραμμές που βρήκε, ζωγραφισμένες πάνω στην εικόνα).
+"""
+
+import argparse
+import csv
+import glob
+import json
+import os
+from concurrent.futures import ProcessPoolExecutor
+
+import cv2
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DRIVES_DIR = os.path.join(HERE, "drives")
+GEOMETRY_FILE = os.path.join(DRIVES_DIR, "camera_front_geometry.json")
+
+ROAD_LINE = 24                                   # ετικέτα RoadLine (sources/CARLA_ref_sensors_ue4-dev.md:854)
+WIDTH, HEIGHT, FOV_DEG = 1280, 960, 90           # όπως στο BMW_spawn.py
+FOCAL = WIDTH / (2 * np.tan(np.radians(FOV_DEG / 2)))   # = 640 pixels
+CX, CY = WIDTH / 2, HEIGHT / 2                   # κέντρο της εικόνας (εκεί είναι ο ορίζοντας, με κλίση 0°)
+
+NEAR, FAR = 3.0, 15.0           # m μπροστά από την κάμερα: εδώ ψάχνουμε γραμμές (ο δρόμος φαίνεται από ~2,7 m)
+SIDE_MIN, SIDE_MAX = 0.5, 3.5   # m στο πλάι: εδώ περιμένουμε τις γραμμές της λωρίδας μας (κέντρο → γραμμή: 1,75 m)
+MIN_POINTS = 150                # ελάχιστα pixels γραμμής για να πιστέψουμε ότι είδαμε γραμμή
+MIN_LENGTH = 4.0                # m: η γραμμή πρέπει να απλώνεται τουλάχιστον τόσο μπροστά-πίσω
+MAX_ANGLE_DEG = 30              # γραμμή πιο στραβή από αυτό δεν είναι γραμμή της λωρίδας μας (π.χ. γραμμή στοπ)
+RANSAC_TOL = 0.15               # m: ένα σημείο «ταιριάζει» στην ευθεία αν απέχει λιγότερο από αυτό
+LANE_WIDTH_RANGE = (3.0, 4.0)   # m: με δύο γραμμές, το πλάτος πρέπει να είναι λογικό (στο Town10 είναι 3,5)
+
+
+# ─── Γεωμετρία κάμερας ──────────────────────────────────────────────────────────────────────────────────
+def geometry_from_carla():
+    """Φτιάχνει το αυτοκίνητο του BMW_spawn.py για λίγο, διαβάζει το bounding box, και υπολογίζει πού είναι η
+    μπροστινή κάμερα με τον ΙΔΙΟ τύπο με το BMW_spawn.py. Χρειάζεται ανοιχτό CARLA."""
+    import carla
+    client = carla.Client("localhost", 2000)
+    client.set_timeout(20.0)
+    world = client.get_world()
+    bp = world.get_blueprint_library().find("vehicle.bmw.grandtourer")
+    vehicle = None
+    for sp in world.get_map().get_spawn_points():
+        vehicle = world.try_spawn_actor(bp, sp)
+        if vehicle is not None:
+            break
+    if vehicle is None:
+        raise RuntimeError("Δεν μπόρεσα να φτιάξω το αυτοκίνητο σε κανένα spawn point.")
+    box = vehicle.bounding_box
+    vehicle.destroy()
+    geometry = {
+        "height": box.location.z + box.extent.z + 0.05,      # roof_z του BMW_spawn.py (από το σημείο αναφοράς)
+        "forward": box.location.x + 0.25 * box.extent.x,     # POS["front"] του BMW_spawn.py
+        "box": [box.location.x, box.location.y, box.location.z, box.extent.x, box.extent.y, box.extent.z],
+    }
+    os.makedirs(DRIVES_DIR, exist_ok=True)
+    with open(GEOMETRY_FILE, "w") as f:
+        json.dump(geometry, f, indent=1)
+    print("Γεωμετρία κάμερας:", geometry, "→", GEOMETRY_FILE)
+    return geometry
+
+
+# ─── Από pixels σε σημεία στο έδαφος ────────────────────────────────────────────────────────────────────
+def pixels_to_ground(u, v, height, forward):
+    """pixel (u, v) → σημείο στο έδαφος σε συντεταγμένες αυτοκινήτου: Χ μπροστά από το σημείο αναφοράς,
+    Υ προς τα ΔΕΞΙΑ (όπως ο άξονας y του CARLA). Κάμερα με κλίση 0°, επίπεδος δρόμος."""
+    below = v - CY                                   # pixels κάτω από τον ορίζοντα (> 0 για το έδαφος)
+    x_cam = FOCAL * height / below                   # m μπροστά από την κάμερα
+    y = (u - CX) * x_cam / FOCAL                     # m δεξιά
+    return x_cam + forward, y, x_cam
+
+
+def ground_to_pixels(x, y, height, forward):
+    """Το αντίστροφο (για τις εικόνες ελέγχου): σημείο στο έδαφος → pixel."""
+    x_cam = x - forward
+    return CX + FOCAL * y / x_cam, CY + FOCAL * height / x_cam
+
+
+# ─── Ευθεία με RANSAC ───────────────────────────────────────────────────────────────────────────────────
+def fit_line(x, y, rng):
+    """Καμπύλη y = c0 + c1·x + c2·x² που ταιριάζει στα περισσότερα σημεία (RANSAC με 3 σημεία).
+    Δεύτερου βαθμού και όχι ευθεία: στις στροφές η γραμμή καμπυλώνει, και μια ευθεία «προεκτεινόμενη» πίσω ως το
+    σημείο αναφοράς του αυτοκινήτου (3–4 m πίσω από τα πρώτα ορατά σημεία) έκανε λάθος ~45 cm (δοκιμή 9 Νοε).
+    Επιστρέφει (c0, c1, πόσα ταιριάζουν, μήκος) ή None."""
+    if len(x) < MIN_POINTS:
+        return None
+    if len(x) > 3000:                                # αρκετά για την καμπύλη, και πιο γρήγορα
+        pick = rng.choice(len(x), 3000, replace=False)
+        x, y = x[pick], y[pick]
+    best = None
+    for _ in range(150):
+        i = rng.choice(len(x), 3, replace=False)
+        if np.ptp(x[i]) < 2.0:                       # τρία σημεία πολύ κοντά μπροστά-πίσω: κακή καμπύλη
+            continue
+        try:                                         # καμπύλη ακριβώς από τα 3 σημεία: c0 + c1·x + c2·x²
+            c0, c1, c2 = np.linalg.solve(np.stack([np.ones(3), x[i], x[i] ** 2], axis=1), y[i])
+        except np.linalg.LinAlgError:
+            continue
+        inliers = np.abs(y - (c0 + c1 * x + c2 * x ** 2)) < RANSAC_TOL
+        if best is None or inliers.sum() > best.sum():
+            best = inliers
+    if best is None or best.sum() < MIN_POINTS:
+        return None
+    c2, c1, c0 = np.polyfit(x[best], y[best], 2)    # τελική καμπύλη: μόνο με τα σημεία που ταιριάζουν
+    length = x[best].max() - x[best].min()
+    return c0, c1, int(best.sum()), length
+
+
+def detect(tags, height, forward, rng):
+    """Μία εικόνα (πίνακας με ετικέτες) → dict με τις μετρήσεις αριστερά και δεξιά."""
+    v, u = np.nonzero(tags == ROAD_LINE)
+    keep = v > CY + 1
+    x, y, x_cam = pixels_to_ground(u[keep].astype(float), v[keep].astype(float), height, forward)
+    near = (x_cam >= NEAR) & (x_cam <= FAR)
+    x, y = x[near], y[near]
+
+    result = {}
+    for side, sign in [("left", -1), ("right", +1)]:     # αριστερά: y < 0, δεξιά: y > 0
+        band = (sign * y >= SIDE_MIN) & (sign * y <= SIDE_MAX)
+        fit = fit_line(x[band], y[band], rng)
+        ok = False
+        dist = angle = np.nan
+        points = 0
+        if fit is not None:
+            c0, c1, points, length = fit
+            dist = sign * c0                             # απόσταση στο σημείο αναφοράς (θετική)
+            angle = np.degrees(np.arctan(c1))
+            ok = length >= MIN_LENGTH and abs(angle) <= MAX_ANGLE_DEG and SIDE_MIN <= dist <= SIDE_MAX
+        result[side] = (dist, angle, points, ok)
+
+    # Με δύο γραμμές: το πλάτος της λωρίδας πρέπει να είναι λογικό, αλλιώς μάλλον μία από τις δύο είναι λάθος
+    # (π.χ. ρίγα διάβασης πεζών). Δεν ξέρουμε ποια, οπότε δεν κρατάμε καμία.
+    if result["left"][3] and result["right"][3]:
+        width = result["left"][0] + result["right"][0]
+        if not (LANE_WIDTH_RANGE[0] <= width <= LANE_WIDTH_RANGE[1]):
+            result["left"] = result["left"][:3] + (False,)
+            result["right"] = result["right"][:3] + (False,)
+    return result
+
+
+def process(job):
+    path, height, forward = job
+    tags = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    rng = np.random.default_rng(int(os.path.basename(path).split(".")[0]))   # ίδιο αποτέλεσμα σε κάθε τρέξιμο
+    r = detect(tags, height, forward, rng)
+    frame = int(os.path.basename(path).split(".")[0])
+    return [frame] + [r["left"][0], r["left"][1], r["left"][2], int(r["left"][3]),
+                      r["right"][0], r["right"][1], r["right"][2], int(r["right"][3])]
+
+
+def debug_image(path, row, height, forward, out_path):
+    """Εικόνα ελέγχου: γκρι = δρόμος κ.λπ., άσπρο = βαφές (ετικέτα 24), κόκκινη/μπλε = η αριστερή/δεξιά γραμμή που
+    βρήκε (ζωγραφισμένη μόνο αν ok). Η κίτρινη ζώνη δείχνει πού ψάχνει (3–15 m μπροστά)."""
+    tags = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    img = np.full((HEIGHT, WIDTH, 3), 60, np.uint8)
+    img[tags == ROAD_LINE] = (255, 255, 255)
+    for x_cam in (NEAR, FAR):
+        v = int(CY + FOCAL * height / x_cam)
+        cv2.line(img, (0, v), (WIDTH - 1, v), (0, 200, 255), 1)
+    _, l_dist, l_ang, _, l_ok, r_dist, r_ang, _, r_ok = row
+    for dist, ang, ok, sign, color in [(l_dist, l_ang, l_ok, -1, (0, 0, 255)), (r_dist, r_ang, r_ok, +1, (255, 0, 0))]:
+        if not ok:
+            continue
+        xs = np.linspace(forward + NEAR, forward + FAR, 30)
+        ys = sign * dist + np.tan(np.radians(ang)) * xs        # (χωρίς την καμπυλότητα: μόνο για να φαίνεται)
+        u, v = ground_to_pixels(xs, ys, height, forward)
+        pts = np.stack([u, v], axis=1).astype(np.int32)
+        cv2.polylines(img, [pts], False, color, 3)
+    text = f"L {l_dist:.2f} m ok={l_ok}   R {r_dist:.2f} m ok={r_ok}"
+    cv2.putText(img, text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+    cv2.imwrite(out_path, img)
+
+
+def find_images(drive):
+    """Ο φάκελος front_semantic της καταγραφής: δίπλα στο CSV (drives/) ή, για παλιές καταγραφές, στον κεντρικό φάκελο."""
+    for base in (DRIVES_DIR, HERE):
+        folder = os.path.join(base, drive, "front_semantic")
+        if os.path.isdir(folder):
+            return folder
+    raise FileNotFoundError(f"Δεν βρήκα το {drive}/front_semantic ούτε στο drives/ ούτε στον κεντρικό φάκελο.")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("drive", nargs="?", help="π.χ. drive_2026-10-30_20-45-55 (χωρίς .csv)")
+    parser.add_argument("--from-carla", action="store_true", help="γεωμετρία κάμερας από το CARLA (μία φορά)")
+    parser.add_argument("--debug", type=int, default=0, help="πόσες εικόνες ελέγχου να σώσει")
+    args = parser.parse_args()
+
+    if args.from_carla:
+        geometry = geometry_from_carla()
+    elif os.path.exists(GEOMETRY_FILE):
+        geometry = json.load(open(GEOMETRY_FILE))
+    else:
+        raise SystemExit("Πρώτα: lane_detector.py --from-carla (με ανοιχτό το CARLA), για τη γεωμετρία της κάμερας.")
+    if args.drive is None:
+        return
+    drive = args.drive[:-4] if args.drive.endswith(".csv") else args.drive
+    height, forward = geometry["height"], geometry["forward"]
+
+    folder = find_images(drive)
+    paths = sorted(glob.glob(os.path.join(folder, "*.png")), key=lambda p: int(os.path.basename(p).split(".")[0]))
+    print(f"{drive}: {len(paths)} εικόνες στο {folder}, κάμερα σε ύψος {height:.2f} m, {forward:.2f} m μπροστά")
+
+    with ProcessPoolExecutor() as pool:
+        rows = list(pool.map(process, [(p, height, forward) for p in paths], chunksize=50))
+
+    out = os.path.join(DRIVES_DIR, f"{drive}_lanes.csv")
+    with open(out, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["frame", "left_dist", "left_angle_deg", "left_points", "left_ok",
+                    "right_dist", "right_angle_deg", "right_points", "right_ok"])
+        for r in rows:
+            w.writerow([r[0]] + [f"{v:.4f}" if isinstance(v, float) else v for v in r[1:]])
+    rows_arr = np.array([[r[4], r[8], r[1] + r[5] if (r[4] and r[8]) else np.nan] for r in rows], dtype=float)
+    print(f"→ {out}")
+    print(f"είδε γραμμή: αριστερά {100 * rows_arr[:, 0].mean():.0f}%, δεξιά {100 * rows_arr[:, 1].mean():.0f}% των εικόνων")
+    widths = rows_arr[:, 2][~np.isnan(rows_arr[:, 2])]
+    if len(widths):
+        # Έλεγχος της γεωμετρίας χωρίς αλήθεια: αριστερά + δεξιά πρέπει να βγαίνει ~3,5 m (πλάτος λωρίδας στο Town10).
+        # Αν βγαίνει π.χ. 3,8, το ύψος της κάμερας είναι λάθος κατά 3,8/3,5 (οι αποστάσεις είναι ανάλογες του ύψους).
+        print(f"πλάτος λωρίδας (αριστερά + δεξιά): διάμεσος {np.median(widths):.3f} m (πρέπει ~3,5)")
+
+    if args.debug:
+        debug_dir = os.path.join(DRIVES_DIR, f"{drive}_lanes_debug")
+        os.makedirs(debug_dir, exist_ok=True)
+        for k in np.linspace(0, len(paths) - 1, args.debug).astype(int):
+            debug_image(paths[k], rows[k], height, forward, os.path.join(debug_dir, f"{rows[k][0]}.png"))
+        print(f"εικόνες ελέγχου → {debug_dir}")
+
+
+if __name__ == "__main__":
+    main()

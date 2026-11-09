@@ -4,6 +4,8 @@ import os
 import numpy as np
 from filterpy.monte_carlo import systematic_resample
 from gps_noise_v2 import GpsNoise
+from lane_camera import FakeLaneCamera
+from lane_map import expected_line_distances
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--receiver", choices=["f9p", "m8t"], default="f9p",
@@ -19,6 +21,9 @@ parser.add_argument("--turn-rate-sigma", type=float)
 parser.add_argument("--show", action="store_true", help="ζωντανή οπτικοποίηση στον χάρτη (pf_view.py)")
 parser.add_argument("--start", type=float, default=0,
                     help="με --show: από ποιο λεπτό της καταγραφής να αρχίσει να ζωγραφίζει")
+parser.add_argument("--lanes", action="store_true",
+                    help="χρήση της κάμερας λωρίδων (αλλιώς μόνο GPS + γυροσκόπιο + ταχύτητα, όπως πριν)")
+parser.add_argument("--lane-sigma", type=float, help="αντικαθιστά το LANE_SIGMA (πόσο εμπιστεύεται την κάμερα)")
 args = parser.parse_args()
 
 # Ρυθμίσεις του φίλτρου για κάθε δέκτη GPS. Είναι αυτό που «πιστεύει» το φίλτρο για το GPS,
@@ -60,6 +65,11 @@ TURN_RATE_SIGMA = SAFETY * np.radians(0.03 * np.sqrt(20))   # rad/s (γυροσ�
 BIAS_TYPICAL = np.radians(18 / 3600)                     # rad/s (in-run bias stability 18 °/h)
 GYRO_READING_NOISE = np.radians(0.03 * np.sqrt(20))      # rad/s (θόρυβος μίας μέτρησης στα 20 Hz)
 STANDSTILL_WEIGHT = (GYRO_READING_NOISE / BIAS_TYPICAL) ** 2   # = 720 μετρήσεις
+
+# Κάμερα λωρίδων (βήμα 4, 9 Νοε 2026): πόσο λάθος «πιστεύει» το φίλτρο ότι κάνει η απόσταση από τη γραμμή.
+# 0,4 m, όπως στο φίλτρο του Tao 2016 (σ. 141, Πίνακας 5.1). Το πραγματικό λάθος του κόσμου (lane_camera.py) είναι
+# 15 cm + σταθερό έως ±10 cm· το φίλτρο δεν το ξέρει. Θα ρυθμιστεί αργότερα, όπως το gps_sigma.
+LANE_SIGMA = 0.4   # m
 
 np.random.seed(args.seed)   # ίδια «ζάρια» σε κάθε τρέξιμο, για να συγκρίνονται οι ρυθμίσεις δίκαια
 
@@ -113,6 +123,22 @@ def update(particles, gps_x, gps_y, gps_sigma):
 
 
 
+def lane_update(particles, measured_left, measured_right, lane_sigma):
+    """Βάρη από την κάμερα λωρίδων. measured_left / measured_right: απόσταση από την αριστερή / δεξιά γραμμή (m),
+    ή None αν η κάμερα δεν είδε γραμμή. Για κάθε particle: πόσο θα απείχε από τις γραμμές αν το αυτοκίνητο ήταν εκεί
+    (από τον χάρτη, lane_map.py), και βάρος exp(-d²/2σ²), όπως με το GPS. Με δύο γραμμές: το γινόμενο των δύο."""
+    expected_left, expected_right, _, _ = expected_line_distances(particles[:, 0], particles[:, 1], particles[:, 2])
+    squared = np.zeros(N)
+    if measured_left is not None:
+        squared += (expected_left - measured_left) ** 2
+    if measured_right is not None:
+        squared += (expected_right - measured_right) ** 2
+    # Όπως στο update του GPS: σε σχέση με το particle που ταιριάζει καλύτερα, για να μη βγουν ποτέ όλα 0.
+    weights = np.exp(-(squared - np.min(squared)) / (2 * lane_sigma**2))
+    weights = weights / np.sum(weights)
+    return weights
+
+
 def resample(particles, weights):
     # systematic, όχι multinomial (αλλαγή 6 Νοε 2026). Τα βάρη είναι σχεδόν ίσα (ESS ~ 998 από 1000), και τότε:
     #   multinomial: διαλέγει στην τύχη και κρατάει ~630 διαφορετικά particles, τα άλλα χάνονται κάθε δευτερόλεπτο,
@@ -145,6 +171,9 @@ if args.velocity_sigma is not None:
     velocity_sigma = args.velocity_sigma
 if args.turn_rate_sigma is not None:
     turn_rate_sigma = args.turn_rate_sigma
+lane_sigma = LANE_SIGMA
+if args.lane_sigma is not None:
+    lane_sigma = args.lane_sigma
 duration = 0.05
 
 # Θόρυβος γυροσκοπίου: ο «κόσμος», ΟΧΙ το φίλτρο (το φίλτρο δεν τα ξέρει αυτά, έχει το δικό του turn_rate_sigma).
@@ -172,6 +201,12 @@ particles = None
 # Ο θόρυβος GPS έχει δικά του «ζάρια», με το ίδιο seed. warm_start: ρεαλιστική πρώτη μέτρηση (αλλαγή 7 Νοε 2026):
 # το αργό λάθος του GPS ξεκινάει από τη συνηθισμένη του τιμή, όχι από 0 (βλ. GpsNoise στο gps_noise_v2.py).
 receiver = GpsNoise(args.receiver, seed=args.seed, warm_start=True)
+
+# Η κάμερα λωρίδων του «κόσμου» (lane_camera.py): μετράει στην ΑΛΗΘΙΝΗ θέση, με λάθος 15 cm + σταθερό λάθος.
+# Δικά της «ζάρια», με το ίδιο seed. 10 εικόνες τη στιγμή = κάθε 2ο βήμα της καταγραφής (20 Hz).
+camera = FakeLaneCamera(seed=args.seed) if args.lanes else None
+lane_measurements = 0      # πόσες εικόνες είδαν τουλάχιστον μία γραμμή (για την εκτύπωση στο τέλος)
+lane_images = 0            # πόσες εικόνες συνολικά
 
 view = None   # το παράθυρο του --show
 if args.show:
@@ -216,6 +251,13 @@ for i in range(len(data)):
         gps_fixes.append((fix[0], fix[1], gt_x, gt_y))
         weights = update(particles, fix[0], fix[1], gps_sigma)
         particles, weights = resample(particles, weights)
+    if camera is not None and i % 2 == 0:
+        measured_left, measured_right = camera.measure(gt_x, gt_y, np.radians(gt_yaw))
+        lane_images += 1
+        if measured_left is not None or measured_right is not None:
+            lane_measurements += 1
+            weights = lane_update(particles, measured_left, measured_right, lane_sigma)
+            particles, weights = resample(particles, weights)
     est_x, est_y, est_yaw = estimate(particles)
     estimates.append((est_x, est_y, est_yaw))
     truths.append((gt_x, gt_y, np.radians(gt_yaw)))
@@ -247,6 +289,8 @@ gps_error = np.sqrt(diff_x**2 + diff_y**2)
 print("δέκτης:", args.receiver)
 print("φίλτρο: μέσο", round(np.mean(filter_error), 2), "m, μέγιστο", round(np.max(filter_error), 2), "m")
 print("gps: μέσο", round(np.mean(gps_error), 2), "m, μέγιστο", round(np.max(gps_error), 2), "m")
+if camera is not None:
+    print("κάμερα λωρίδων: είδε γραμμή σε", round(100 * lane_measurements / lane_images), "% των εικόνων")
 
 
 # particles = create_particles(10, 20, 3, N)
