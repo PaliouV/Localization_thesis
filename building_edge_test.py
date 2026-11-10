@@ -139,7 +139,7 @@ def detect_vertical_edges(bgr):
     if lines is None:
         return []
     kept = []
-    for x1, y1, x2, y2 in lines[:, 0]:
+    for x1, y1, x2, y2 in lines.reshape(-1, 4):          # (N,1,4) ή (N,4), ανάλογα με την έκδοση του OpenCV
         tilt = np.degrees(np.arctan2(abs(x2 - x1), abs(y2 - y1)))
         top, bottom = min(y1, y2), max(y1, y2)
         if tilt <= MAX_TILT_DEG and top < CY - ABOVE_HORIZON_PX:
