@@ -22,6 +22,8 @@
   frame, left_dist, left_angle_deg, left_points, left_ok, right_dist, right_angle_deg, right_points, right_ok,
   left_curv, right_curv (c2 της καμπύλης, 1/m: μόνο για τις εικόνες ελέγχου· προστέθηκε 9 Νοε 2026),
   left_kind, right_kind (0 αμφίσημο/δύο γραμμές, 1 απλή γραμμή, 2 διπλή → η μέση της, 3 πολλές ρίγες), left_angle_ok, right_angle_ok
+  left_type, right_type (11 Νοε 2026: 0 δεν ξέρω, 1 διακεκομμένη, 2 συνεχής, 3 διπλή), left_run, right_run (το μεγαλύτερο
+  συνεχόμενο βαμμένο κομμάτι της γραμμής, m)
   (left_points, right_points: από 10 Νοε 2026 είναι σημεία ανά σειρά εικόνας, όχι pixels)
   (dist σε m, πάντα θετική· angle σε μοίρες, θετική = η λωρίδα στρίβει προς τα δεξιά του αυτοκινήτου)
 
@@ -59,6 +61,8 @@ MAX_ANGLE_DEG = 30              # γραμμή πιο στραβή από αυτ
 MIN_ANGLE_LENGTH = 8.0          # m: για να εμπιστευτούμε τη ΓΩΝΙΑ, η γραμμή πρέπει να απλώνεται τόσο (9 Νοε 2026)
 RANSAC_TOL = 0.08               # m: ένα σημείο «ταιριάζει» στην καμπύλη αν απέχει λιγότερο από αυτό
 MAX_LINE_WIDTH = 0.35           # m: βαφή πιο φαρδιά από αυτό δεν είναι γραμμή λωρίδας (ρίγα διάβασης, γραμμή στοπ, βέλος)
+PAINT_GAP = 1.0                 # m: κενό στη βαφή μεγαλύτερο από αυτό, κατά μήκος της γραμμής, χωρίζει δύο «κομμάτια»
+SOLID_MIN_RUN = 4.0             # m: συνεχόμενη βαφή τουλάχιστον τόσο = ΣΥΝΕΧΗΣ γραμμή (οι παύλες του Town10 είναι ~2 m)
 DOUBLE_MAX_GAP = 0.25           # m: δύο λεπτές βαφές με κενό έως τόσο = ΔΙΠΛΗ γραμμή (στο Town10 το κενό είναι ~0,1 m)
 LANE_WIDTH_RANGE = (3.0, 4.0)   # m: με δύο γραμμές, το πλάτος πρέπει να είναι λογικό (στο Town10 είναι 3,5)
 
@@ -184,10 +188,25 @@ def fit_line(x, y, rng):
     return c0, c1, int(best.sum()), length, c2
 
 
+def paint_runs(x):
+    """Τα βαμμένα «κομμάτια» κατά μήκος μιας γραμμής (11 Νοε 2026). x: πόσο μπροστά είναι κάθε σημείο της (m).
+    Όπου δύο διαδοχικά σημεία απέχουν πάνω από PAINT_GAP, εκεί η βαφή έχει κενό. (Οι σειρές της εικόνας απέχουν το
+    πολύ ~0,2 m στα 15 m, άρα ένα κενό 1 m είναι πραγματικό κενό.)
+    Επιστρέφει (μήκος του μεγαλύτερου κομματιού σε m, πόσα κομμάτια)."""
+    if len(x) == 0:
+        return 0.0, 0
+    x = np.sort(x)
+    cuts = np.nonzero(np.diff(x) > PAINT_GAP)[0]
+    starts = np.concatenate(([0], cuts + 1))
+    ends = np.concatenate((cuts, [len(x) - 1]))
+    return float(np.max(x[ends] - x[starts])), len(starts)
+
+
 def find_lines(x, y, is_double, rng, max_lines=4):
     """Όλες οι ξεχωριστές γραμμές στα σημεία μιας πλευράς (μέχρι max_lines): βρίσκει την πιο «γεμάτη» με RANSAC,
     βγάζει τα σημεία της, ξαναψάχνει.
-    Επιστρέφει λίστα από (c0, c1, πόσα σημεία, μήκος, c2, ποσοστό των σημείων της που είναι από διπλή γραμμή)."""
+    Επιστρέφει λίστα από (c0, c1, πόσα σημεία, μήκος, c2, ποσοστό των σημείων της που είναι από διπλή γραμμή,
+    μεγαλύτερο συνεχόμενο βαμμένο κομμάτι σε m, πόσα κομμάτια)."""
     lines = []
     remaining = np.ones(len(x), bool)
     for _ in range(max_lines):
@@ -199,7 +218,8 @@ def find_lines(x, y, is_double, rng, max_lines=4):
         c0, c1, _, _, c2 = fit
         distance = np.abs(y - (c0 + c1 * x + c2 * x ** 2))
         on_line = remaining & (distance < RANSAC_TOL)
-        lines.append(fit + (float(is_double[on_line].mean()) if on_line.any() else 0.0,))
+        longest_run, runs = paint_runs(x[on_line])
+        lines.append(fit + (float(is_double[on_line].mean()) if on_line.any() else 0.0, longest_run, runs))
         remaining &= distance >= 2 * RANSAC_TOL      # βγάζουμε τα σημεία της
     return lines
 
@@ -211,20 +231,27 @@ def choose_line(lines):
                            βλ. line_points: η διπλή γραμμή έχει ήδη γίνει ΜΙΑ γραμμή στη μέση της)
       2 γραμμές          → δεν ξέρουμε ποια είναι η δική μας → «δεν είδα»                          (είδος 0)
       3 ή περισσότερες   → πολλές παράλληλες ρίγες → «δεν είδα»                                    (είδος 3)
-    Επιστρέφει (c0, c1, πόσα σημεία, μήκος, c2, είδος) ή None."""
+    Τύπος της γραμμής (11 Νοε 2026), από το πώς είναι βαμμένη κατά μήκος της:
+      3 = διπλή·  2 = συνεχής (έχει συνεχόμενη βαφή ≥ SOLID_MIN_RUN: μια παύλα δεν είναι ποτέ τόσο μακριά, και μια
+      συνεχής που την κρύβει λίγο ένα αυτοκίνητο έχει ακόμα ένα μακρύ κομμάτι)·  1 = διακεκομμένη (δύο ή περισσότερα
+      κοντά κομμάτια)·  0 = δεν ξέρω.
+    Επιστρέφει (c0, c1, πόσα σημεία, μήκος, c2, είδος, τύπος, μεγαλύτερο συνεχόμενο κομμάτι σε m) ή None."""
     good = [f for f in lines if f[3] >= MIN_LENGTH and abs(np.degrees(np.arctan(f[1]))) <= MAX_ANGLE_DEG]
     if not good:
         return None
     main = max(good, key=lambda f: f[2])
     parallel = [f for f in good if abs(f[1] - main[1]) < 0.05 and abs(f[4] - main[4]) < 0.02]
     if len(parallel) == 1:
-        return main[:5] + (2 if main[5] >= 0.5 else 1,)
-    return main[:5] + (3 if len(parallel) >= 3 else 0,)
+        if main[5] >= 0.5:
+            return main[:5] + (2, 3, main[6])
+        line_type = 2 if main[6] >= SOLID_MIN_RUN else (1 if main[7] >= 2 else 0)
+        return main[:5] + (1, line_type, main[6])
+    return main[:5] + (3 if len(parallel) >= 3 else 0, 0, main[6])
 
 
 def detect(tags, height, forward, rng):
     """Μία εικόνα (πίνακας με ετικέτες) → dict με τις μετρήσεις αριστερά και δεξιά:
-    (απόσταση, γωνία, σημεία, ok, c2, είδος γραμμής, γωνία ok)."""
+    (απόσταση, γωνία, σημεία, ok, c2, είδος γραμμής, γωνία ok, τύπος γραμμής, μεγαλύτερο συνεχόμενο κομμάτι)."""
     x, y, is_double = line_points(tags, height, forward)   # ένα σημείο ανά σειρά και βαφή· διπλή γραμμή → η μέση της
 
     result = {}
@@ -233,16 +260,16 @@ def detect(tags, height, forward, rng):
         line = choose_line(find_lines(x[band], y[band], is_double[band], rng))
         ok = angle_ok = False
         dist = angle = np.nan
-        points = kind = 0
-        curv = 0.0
+        points = kind = line_type = 0
+        curv = run = 0.0
         if line is not None:
-            c0, c1, points, length, curv, kind = line
+            c0, c1, points, length, curv, kind, line_type, run = line
             dist = sign * c0                             # απόσταση στο σημείο αναφοράς (θετική)
             angle = np.degrees(np.arctan(c1))
             ok = kind in (1, 2) and SIDE_MIN <= dist <= SIDE_MAX
             # Η γωνία θέλει μακρύτερη γραμμή από την απόσταση: με λίγα μέτρα, μικρά λάθη στα σημεία τη «γέρνουν»
             angle_ok = ok and length >= MIN_ANGLE_LENGTH
-        result[side] = (dist, angle, points, ok, curv, kind, angle_ok)
+        result[side] = (dist, angle, points, ok, curv, kind, angle_ok, line_type, run)
 
     # Με δύο γραμμές: το πλάτος της λωρίδας πρέπει να είναι λογικό, αλλιώς μάλλον μία από τις δύο είναι λάθος
     # (π.χ. ρίγα διάβασης πεζών). Δεν ξέρουμε ποια, οπότε δεν κρατάμε καμία.
@@ -251,7 +278,7 @@ def detect(tags, height, forward, rng):
         if not (LANE_WIDTH_RANGE[0] <= width <= LANE_WIDTH_RANGE[1]):
             for s in ("left", "right"):
                 r = result[s]
-                result[s] = r[:3] + (False,) + r[4:6] + (False,)
+                result[s] = r[:3] + (False,) + r[4:6] + (False,) + r[7:]
     return result
 
 
@@ -264,7 +291,8 @@ def process(job):
     return [frame] + [r["left"][0], r["left"][1], r["left"][2], int(r["left"][3]),
                       r["right"][0], r["right"][1], r["right"][2], int(r["right"][3]),
                       r["left"][4], r["right"][4],
-                      r["left"][5], r["right"][5], int(r["left"][6]), int(r["right"][6])]
+                      r["left"][5], r["right"][5], int(r["left"][6]), int(r["right"][6]),
+                      r["left"][7], r["right"][7], r["left"][8], r["right"][8]]
 
 
 def debug_image(path, row, height, forward, out_path):
@@ -330,7 +358,8 @@ def main():
         w = csv.writer(f)
         w.writerow(["frame", "left_dist", "left_angle_deg", "left_points", "left_ok",
                     "right_dist", "right_angle_deg", "right_points", "right_ok", "left_curv", "right_curv",
-                    "left_kind", "right_kind", "left_angle_ok", "right_angle_ok"])
+                    "left_kind", "right_kind", "left_angle_ok", "right_angle_ok",
+                    "left_type", "right_type", "left_run", "right_run"])
         for r in rows:
             w.writerow([r[0]] + [f"{v:.4f}" if isinstance(v, float) else v for v in r[1:]])
     rows_arr = np.array([[r[4], r[8], r[1] + r[5] if (r[4] and r[8]) else np.nan] for r in rows], dtype=float)
