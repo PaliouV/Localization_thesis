@@ -3,15 +3,17 @@
 όπου είναι οι εικόνες. Χρειάζεται μόνο numpy και cv2 (και carla μόνο για το --from-carla).
 
 Τι κάνει, για κάθε εικόνα της ΜΠΡΟΣΤΙΝΗΣ semantic κάμερας (10 τη στιγμή):
-  1. Κρατάει τα pixels με ετικέτα 24 (RoadLine: «οι βαφές του δρόμου»).
+  1. Κρατάει τα pixels με ετικέτα 24 (RoadLine: «οι βαφές του δρόμου»). Σε κάθε σειρά της εικόνας, κάθε βαφή
+     γίνεται ΕΝΑ σημείο στο κέντρο της· δύο λεπτές κολλητές βαφές (διπλή γραμμή) γίνονται ένα σημείο στη ΜΕΣΗ τους·
+     οι φαρδιές βαφές (διάβαση, στοπ, βέλη) πετιούνται (10 Νοε 2026, βλ. line_points).
   2. Τα μεταφέρει στο έδαφος: κάμερα με γνωστό ύψος, κλίση 0°, οπτικό πεδίο 90°, δρόμος επίπεδος.
-     Κάθε pixel → σημείο «Χ m μπροστά, Υ m δεξιά» από το αυτοκίνητο.
+     Κάθε σημείο → «Χ m μπροστά, Υ m δεξιά» από το αυτοκίνητο.
   3. Κρατάει τα σημεία 3–15 m μπροστά από την κάμερα, αριστερά και δεξιά του αυτοκινήτου (0,5–3,5 m στο πλάι).
   4. Σε κάθε πλευρά ταιριάζει μια καμπύλη Υ = c0 + c1·Χ + c2·Χ² (RANSAC: αγνοεί τα σημεία που δεν ταιριάζουν,
      π.χ. βέλη· καμπύλη και όχι ευθεία, για τις στροφές).
      c0 = πλάγια απόσταση της γραμμής στο ΣΗΜΕΙΟ ΑΝΑΦΟΡΑΣ του αυτοκινήτου (εκεί που είναι τα gt_x, gt_y)·
      c1 = κλίση στο σημείο αναφοράς → γωνία της λωρίδας ως προς το αυτοκίνητο.
-  5. Βρίσκει ΟΛΕΣ τις παράλληλες γραμμές της πλευράς: διπλή γραμμή → η μέση της· 3+ ρίγες (διάβαση) → «δεν είδα».
+  5. Βρίσκει ΟΛΕΣ τις παράλληλες γραμμές της πλευράς: αν είναι πάνω από μία, δεν ξέρουμε ποια είναι η δική μας → «δεν είδα».
   6. «Δεν είδα» αν: λίγα σημεία, πολύ μικρό μήκος, παράλογη γωνία, ή (με δύο γραμμές) πλάτος λωρίδας εκτός 3–4 m.
      Η γωνία σημειώνεται «ok» μόνο αν η γραμμή απλώνεται τουλάχιστον 8 m.
 Βγάζει ΤΕΛΕΙΕΣ μετρήσεις (χωρίς επιπλέον λάθος): το λάθος 15 cm και οι απώλειες μπαίνουν στο Mac (απόφαση 9 Νοε).
@@ -19,7 +21,10 @@
 Αποτέλεσμα: drives/<καταγραφή>_lanes.csv, μία γραμμή ανά εικόνα:
   frame, left_dist, left_angle_deg, left_points, left_ok, right_dist, right_angle_deg, right_points, right_ok,
   left_curv, right_curv (c2 της καμπύλης, 1/m: μόνο για τις εικόνες ελέγχου· προστέθηκε 9 Νοε 2026),
-  left_kind, right_kind (0 αμφίσημο, 1 μία γραμμή, 2 διπλή → η μέση της, 3 πολλές ρίγες/διάβαση), left_angle_ok, right_angle_ok
+  left_kind, right_kind (0 αμφίσημο/δύο γραμμές, 1 απλή γραμμή, 2 διπλή → η μέση της, 3 πολλές ρίγες), left_angle_ok, right_angle_ok
+  left_type, right_type (11 Νοε 2026: 0 δεν ξέρω, 1 διακεκομμένη, 2 συνεχής, 3 διπλή), left_run, right_run (το μεγαλύτερο
+  συνεχόμενο βαμμένο κομμάτι της γραμμής, m)
+  (left_points, right_points: από 10 Νοε 2026 είναι σημεία ανά σειρά εικόνας, όχι pixels)
   (dist σε m, πάντα θετική· angle σε μοίρες, θετική = η λωρίδα στρίβει προς τα δεξιά του αυτοκινήτου)
 
 Χρήση (από τον φάκελο του repo, στο εργαστήριο):
@@ -50,11 +55,15 @@ CX, CY = WIDTH / 2, HEIGHT / 2                   # κέντρο της εικό�
 
 NEAR, FAR = 3.0, 15.0           # m μπροστά από την κάμερα: εδώ ψάχνουμε γραμμές (ο δρόμος φαίνεται από ~2,7 m)
 SIDE_MIN, SIDE_MAX = 0.5, 3.5   # m στο πλάι: εδώ περιμένουμε τις γραμμές της λωρίδας μας (κέντρο → γραμμή: 1,75 m)
-MIN_POINTS = 150                # ελάχιστα pixels γραμμής για να πιστέψουμε ότι είδαμε γραμμή
+MIN_POINTS = 30                 # ελάχιστα σημεία γραμμής (ένα σημείο ανά σειρά της εικόνας) για να πιστέψουμε ότι είδαμε γραμμή
 MIN_LENGTH = 4.0                # m: η γραμμή πρέπει να απλώνεται τουλάχιστον τόσο μπροστά-πίσω
 MAX_ANGLE_DEG = 30              # γραμμή πιο στραβή από αυτό δεν είναι γραμμή της λωρίδας μας (π.χ. γραμμή στοπ)
 MIN_ANGLE_LENGTH = 8.0          # m: για να εμπιστευτούμε τη ΓΩΝΙΑ, η γραμμή πρέπει να απλώνεται τόσο (9 Νοε 2026)
-RANSAC_TOL = 0.15               # m: ένα σημείο «ταιριάζει» στην ευθεία αν απέχει λιγότερο από αυτό
+RANSAC_TOL = 0.08               # m: ένα σημείο «ταιριάζει» στην καμπύλη αν απέχει λιγότερο από αυτό
+MAX_LINE_WIDTH = 0.35           # m: βαφή πιο φαρδιά από αυτό δεν είναι γραμμή λωρίδας (ρίγα διάβασης, γραμμή στοπ, βέλος)
+PAINT_GAP = 1.0                 # m: κενό στη βαφή μεγαλύτερο από αυτό, κατά μήκος της γραμμής, χωρίζει δύο «κομμάτια»
+SOLID_MIN_RUN = 4.0             # m: συνεχόμενη βαφή τουλάχιστον τόσο = ΣΥΝΕΧΗΣ γραμμή (οι παύλες του Town10 είναι ~2 m)
+DOUBLE_MAX_GAP = 0.25           # m: δύο λεπτές βαφές με κενό έως τόσο = ΔΙΠΛΗ γραμμή (στο Town10 το κενό είναι ~0,1 m)
 LANE_WIDTH_RANGE = (3.0, 4.0)   # m: με δύο γραμμές, το πλάτος πρέπει να είναι λογικό (στο Town10 είναι 3,5)
 
 
@@ -108,6 +117,47 @@ def ground_to_pixels(x, y, height, forward):
     return CX + FOCAL * y / x_cam, CY + FOCAL * height / x_cam
 
 
+# ─── Από την εικόνα σε σημεία γραμμών ───────────────────────────────────────────────────────────────────
+def line_points(tags, height, forward):
+    """Ένα σημείο ανά σειρά της εικόνας για κάθε βαφή (διόρθωση 10 Νοε 2026).
+    Σε κάθε σειρά (= μία απόσταση μπροστά) οι βαφές είναι οριζόντια «κομμάτια» από pixels με ετικέτα 24:
+      - κομμάτι πιο φαρδύ από MAX_LINE_WIDTH → δεν είναι γραμμή λωρίδας (διάβαση, στοπ, βέλος) → πετιέται
+      - δύο λεπτά κομμάτια με μικρό κενό (≤ DOUBLE_MAX_GAP) → ΔΙΠΛΗ γραμμή → ΕΝΑ σημείο στη μέση τους,
+        γιατί εκεί βάζει ο χάρτης το όριο της λωρίδας
+      - τρία ή περισσότερα κολλητά → κάτι άλλο (π.χ. διαγράμμιση) → πετιούνται
+      - μόνο του → ένα σημείο στο κέντρο του
+    Γιατί έτσι: η διπλή κίτρινη του Town10 είναι δύο γραμμές σε απόσταση ~0,28 m. Με όλα τα pixels μαζί, η καμπύλη
+    «έπιανε» και τις δύο λοξά (από τη μία στην άλλη) και, προεκτεινόμενη ως το αυτοκίνητο, έκανε λάθος ±0,5 m και
+    ψεύτικη γωνία ±10° (μετρημένο 10 Νοε 2026, εικόνες 17744–17900 της καταγραφής 30 Οκτ 20:45).
+    Επιστρέφει (Χ μπροστά, Υ δεξιά, είναι_διπλή) για τα σημεία NEAR–FAR m μπροστά από την κάμερα."""
+    v0 = int(np.ceil(CY + FOCAL * height / FAR))
+    v1 = min(int(np.floor(CY + FOCAL * height / NEAR)), HEIGHT - 1)
+    mask = np.zeros((v1 - v0 + 1, WIDTH + 2), np.int8)
+    mask[:, 1:-1] = tags[v0:v1 + 1] == ROAD_LINE
+    change = np.diff(mask, axis=1)
+    row, start = np.nonzero(change == 1)             # αρχή κάθε κομματιού (στήλη του πρώτου pixel)
+    _, end = np.nonzero(change == -1)                # τέλος (στήλη μετά το τελευταίο pixel) — ίδια σειρά με τις αρχές
+    if len(row) == 0:
+        return np.empty(0), np.empty(0), np.empty(0, bool)
+    x_cam = FOCAL * height / (row + v0 - CY)         # m μπροστά από την κάμερα, για κάθε κομμάτι
+    metres = x_cam / FOCAL                           # πόσα m είναι ένα pixel σε αυτή τη σειρά
+    narrow = (end - start) * metres <= MAX_LINE_WIDTH
+    # κολλητό με το επόμενο κομμάτι της ίδιας σειράς; (και τα δύο λεπτά, μικρό κενό)
+    close = np.zeros(len(row), bool)
+    close[:-1] = ((row[1:] == row[:-1]) & narrow[1:] & narrow[:-1]
+                  & ((start[1:] - end[:-1]) * metres[:-1] <= DOUBLE_MAX_GAP))
+    close_prev = np.zeros(len(row), bool)
+    close_prev[1:] = close[:-1]                      # κολλητό με το προηγούμενο
+    single = narrow & ~close & ~close_prev
+    first_of_pair = close & ~close_prev              # ζευγάρι ακριβώς δύο κομματιών: το πρώτο του...
+    first_of_pair[:-1] &= ~close[1:]                 # ...και το δεύτερο δεν είναι κολλητό με τρίτο
+    i = np.nonzero(first_of_pair)[0]
+    centre = np.concatenate([(start[single] + end[single] - 1) / 2, (start[i] + end[i + 1] - 1) / 2])
+    x_cam = np.concatenate([x_cam[single], x_cam[i]])
+    is_double = np.concatenate([np.zeros(single.sum(), bool), np.ones(len(i), bool)])
+    return x_cam + forward, (centre - CX) * x_cam / FOCAL, is_double
+
+
 # ─── Ευθεία με RANSAC ───────────────────────────────────────────────────────────────────────────────────
 def fit_line(x, y, rng):
     """Καμπύλη y = c0 + c1·x + c2·x² που ταιριάζει στα περισσότερα σημεία (RANSAC με 3 σημεία).
@@ -138,9 +188,25 @@ def fit_line(x, y, rng):
     return c0, c1, int(best.sum()), length, c2
 
 
-def find_lines(x, y, rng, max_lines=4):
+def paint_runs(x):
+    """Τα βαμμένα «κομμάτια» κατά μήκος μιας γραμμής (11 Νοε 2026). x: πόσο μπροστά είναι κάθε σημείο της (m).
+    Όπου δύο διαδοχικά σημεία απέχουν πάνω από PAINT_GAP, εκεί η βαφή έχει κενό. (Οι σειρές της εικόνας απέχουν το
+    πολύ ~0,2 m στα 15 m, άρα ένα κενό 1 m είναι πραγματικό κενό.)
+    Επιστρέφει (μήκος του μεγαλύτερου κομματιού σε m, πόσα κομμάτια)."""
+    if len(x) == 0:
+        return 0.0, 0
+    x = np.sort(x)
+    cuts = np.nonzero(np.diff(x) > PAINT_GAP)[0]
+    starts = np.concatenate(([0], cuts + 1))
+    ends = np.concatenate((cuts, [len(x) - 1]))
+    return float(np.max(x[ends] - x[starts])), len(starts)
+
+
+def find_lines(x, y, is_double, rng, max_lines=4):
     """Όλες οι ξεχωριστές γραμμές στα σημεία μιας πλευράς (μέχρι max_lines): βρίσκει την πιο «γεμάτη» με RANSAC,
-    βγάζει τα σημεία της, ξαναψάχνει. Επιστρέφει λίστα από (c0, c1, πόσα σημεία, μήκος, c2)."""
+    βγάζει τα σημεία της, ξαναψάχνει.
+    Επιστρέφει λίστα από (c0, c1, πόσα σημεία, μήκος, c2, ποσοστό των σημείων της που είναι από διπλή γραμμή,
+    μεγαλύτερο συνεχόμενο βαμμένο κομμάτι σε m, πόσα κομμάτια)."""
     lines = []
     remaining = np.ones(len(x), bool)
     for _ in range(max_lines):
@@ -149,63 +215,61 @@ def find_lines(x, y, rng, max_lines=4):
         fit = fit_line(x[remaining], y[remaining], rng)
         if fit is None:
             break
-        lines.append(fit)
         c0, c1, _, _, c2 = fit
-        remaining &= np.abs(y - (c0 + c1 * x + c2 * x ** 2)) >= 2 * RANSAC_TOL   # βγάζουμε τα σημεία της (και το πάχος της)
+        distance = np.abs(y - (c0 + c1 * x + c2 * x ** 2))
+        on_line = remaining & (distance < RANSAC_TOL)
+        longest_run, runs = paint_runs(x[on_line])
+        lines.append(fit + (float(is_double[on_line].mean()) if on_line.any() else 0.0, longest_run, runs))
+        remaining &= distance >= 2 * RANSAC_TOL      # βγάζουμε τα σημεία της
     return lines
 
 
 def choose_line(lines):
-    """Από τις γραμμές μιας πλευράς, ποια είναι η γραμμή της λωρίδας μας (διόρθωση 9 Νοε 2026).
+    """Από τις γραμμές μιας πλευράς, ποια είναι η γραμμή της λωρίδας μας.
     Κρατάμε μόνο «σωστές» γραμμές (αρκετά μακριές, όχι πολύ στραβές) που είναι ΠΑΡΑΛΛΗΛΕΣ με την πιο γεμάτη. Μετά:
-      1 γραμμή                         → αυτή                                          (είδος 1)
-      2 γραμμές, 0,3–1,5 m η μία από την άλλη → ΔΙΠΛΗ γραμμή: η ΜΕΣΗ τους, γιατί εκεί βάζει ο χάρτης το όριο (είδος 2)
-                                         (πριν: έπιανε τη μία από τις δύο → λάθος ±0,45 m στο 74% των διπλών γραμμών)
-      2 γραμμές πιο μακριά η μία από την άλλη → δεν ξέρουμε ποια είναι η δική μας → «δεν είδα»     (είδος 0)
-      3 ή περισσότερες                → πολλές παράλληλες ρίγες = μάλλον διάβαση πεζών → «δεν είδα»   (είδος 3)
-    Επιστρέφει (c0, c1, πόσα σημεία, μήκος, c2, είδος) ή None."""
+      1 γραμμή           → αυτή. Είδος 1 = απλή, είδος 2 = διπλή (τα περισσότερα σημεία της είναι «μέση διπλής»,
+                           βλ. line_points: η διπλή γραμμή έχει ήδη γίνει ΜΙΑ γραμμή στη μέση της)
+      2 γραμμές          → δεν ξέρουμε ποια είναι η δική μας → «δεν είδα»                          (είδος 0)
+      3 ή περισσότερες   → πολλές παράλληλες ρίγες → «δεν είδα»                                    (είδος 3)
+    Τύπος της γραμμής (11 Νοε 2026), από το πώς είναι βαμμένη κατά μήκος της:
+      3 = διπλή·  2 = συνεχής (έχει συνεχόμενη βαφή ≥ SOLID_MIN_RUN: μια παύλα δεν είναι ποτέ τόσο μακριά, και μια
+      συνεχής που την κρύβει λίγο ένα αυτοκίνητο έχει ακόμα ένα μακρύ κομμάτι)·  1 = διακεκομμένη (δύο ή περισσότερα
+      κοντά κομμάτια)·  0 = δεν ξέρω.
+    Επιστρέφει (c0, c1, πόσα σημεία, μήκος, c2, είδος, τύπος, μεγαλύτερο συνεχόμενο κομμάτι σε m) ή None."""
     good = [f for f in lines if f[3] >= MIN_LENGTH and abs(np.degrees(np.arctan(f[1]))) <= MAX_ANGLE_DEG]
     if not good:
         return None
     main = max(good, key=lambda f: f[2])
     parallel = [f for f in good if abs(f[1] - main[1]) < 0.05 and abs(f[4] - main[4]) < 0.02]
     if len(parallel) == 1:
-        return main + (1,)
-    if len(parallel) >= 3:
-        return main + (3,)
-    a, b = parallel
-    separation = abs(a[0] - b[0])
-    if 0.3 <= separation <= 1.5:
-        mid = tuple((a[k] + b[k]) / 2 for k in (0, 1)) + (a[2] + b[2], max(a[3], b[3]), (a[4] + b[4]) / 2, 2)
-        return mid
-    return main + (0,)
+        if main[5] >= 0.5:
+            return main[:5] + (2, 3, main[6])
+        line_type = 2 if main[6] >= SOLID_MIN_RUN else (1 if main[7] >= 2 else 0)
+        return main[:5] + (1, line_type, main[6])
+    return main[:5] + (3 if len(parallel) >= 3 else 0, 0, main[6])
 
 
 def detect(tags, height, forward, rng):
     """Μία εικόνα (πίνακας με ετικέτες) → dict με τις μετρήσεις αριστερά και δεξιά:
-    (απόσταση, γωνία, σημεία, ok, c2, είδος γραμμής, γωνία ok)."""
-    v, u = np.nonzero(tags == ROAD_LINE)
-    keep = v > CY + 1
-    x, y, x_cam = pixels_to_ground(u[keep].astype(float), v[keep].astype(float), height, forward)
-    near = (x_cam >= NEAR) & (x_cam <= FAR)
-    x, y = x[near], y[near]
+    (απόσταση, γωνία, σημεία, ok, c2, είδος γραμμής, γωνία ok, τύπος γραμμής, μεγαλύτερο συνεχόμενο κομμάτι)."""
+    x, y, is_double = line_points(tags, height, forward)   # ένα σημείο ανά σειρά και βαφή· διπλή γραμμή → η μέση της
 
     result = {}
     for side, sign in [("left", -1), ("right", +1)]:     # αριστερά: y < 0, δεξιά: y > 0
         band = (sign * y >= SIDE_MIN) & (sign * y <= SIDE_MAX)
-        line = choose_line(find_lines(x[band], y[band], rng))
+        line = choose_line(find_lines(x[band], y[band], is_double[band], rng))
         ok = angle_ok = False
         dist = angle = np.nan
-        points = kind = 0
-        curv = 0.0
+        points = kind = line_type = 0
+        curv = run = 0.0
         if line is not None:
-            c0, c1, points, length, curv, kind = line
+            c0, c1, points, length, curv, kind, line_type, run = line
             dist = sign * c0                             # απόσταση στο σημείο αναφοράς (θετική)
             angle = np.degrees(np.arctan(c1))
             ok = kind in (1, 2) and SIDE_MIN <= dist <= SIDE_MAX
             # Η γωνία θέλει μακρύτερη γραμμή από την απόσταση: με λίγα μέτρα, μικρά λάθη στα σημεία τη «γέρνουν»
             angle_ok = ok and length >= MIN_ANGLE_LENGTH
-        result[side] = (dist, angle, points, ok, curv, kind, angle_ok)
+        result[side] = (dist, angle, points, ok, curv, kind, angle_ok, line_type, run)
 
     # Με δύο γραμμές: το πλάτος της λωρίδας πρέπει να είναι λογικό, αλλιώς μάλλον μία από τις δύο είναι λάθος
     # (π.χ. ρίγα διάβασης πεζών). Δεν ξέρουμε ποια, οπότε δεν κρατάμε καμία.
@@ -214,7 +278,7 @@ def detect(tags, height, forward, rng):
         if not (LANE_WIDTH_RANGE[0] <= width <= LANE_WIDTH_RANGE[1]):
             for s in ("left", "right"):
                 r = result[s]
-                result[s] = r[:3] + (False,) + r[4:6] + (False,)
+                result[s] = r[:3] + (False,) + r[4:6] + (False,) + r[7:]
     return result
 
 
@@ -227,7 +291,8 @@ def process(job):
     return [frame] + [r["left"][0], r["left"][1], r["left"][2], int(r["left"][3]),
                       r["right"][0], r["right"][1], r["right"][2], int(r["right"][3]),
                       r["left"][4], r["right"][4],
-                      r["left"][5], r["right"][5], int(r["left"][6]), int(r["right"][6])]
+                      r["left"][5], r["right"][5], int(r["left"][6]), int(r["right"][6]),
+                      r["left"][7], r["right"][7], r["left"][8], r["right"][8]]
 
 
 def debug_image(path, row, height, forward, out_path):
@@ -293,7 +358,8 @@ def main():
         w = csv.writer(f)
         w.writerow(["frame", "left_dist", "left_angle_deg", "left_points", "left_ok",
                     "right_dist", "right_angle_deg", "right_points", "right_ok", "left_curv", "right_curv",
-                    "left_kind", "right_kind", "left_angle_ok", "right_angle_ok"])
+                    "left_kind", "right_kind", "left_angle_ok", "right_angle_ok",
+                    "left_type", "right_type", "left_run", "right_run"])
         for r in rows:
             w.writerow([r[0]] + [f"{v:.4f}" if isinstance(v, float) else v for v in r[1:]])
     rows_arr = np.array([[r[4], r[8], r[1] + r[5] if (r[4] and r[8]) else np.nan] for r in rows], dtype=float)

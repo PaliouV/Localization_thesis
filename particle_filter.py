@@ -5,7 +5,7 @@ import numpy as np
 from filterpy.monte_carlo import systematic_resample
 from gps_noise_v2 import GpsNoise
 from lane_camera import DetectorLaneCamera, FakeLaneCamera
-from lane_map import expected_line_distances
+from lane_map import LANES, expected_line_distances, expected_line_types_and_angle, nearest_lane_point
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--receiver", choices=["f9p", "m8t"], default="f9p",
@@ -28,6 +28,10 @@ parser.add_argument("--lane-source", choices=["fake", "detector"], default="fake
                     help="με --lanes: fake = ψεύτικη κάμερα από τον χάρτη· detector = το CSV του ανιχνευτή του εργαστηρίου")
 parser.add_argument("--wheel-scale", type=float,
                     help="σταθερό λάθος κλίμακας της ταχύτητας των τροχών (π.χ. 0.01 = +1%%)· αλλιώς τυχαίο ανά διαδρομή")
+parser.add_argument("--no-lane-type", action="store_true",
+                    help="με --lanes: ΧΩΡΙΣ το είδος της γραμμής (για σύγκριση)")
+parser.add_argument("--no-lane-angle", action="store_true",
+                    help="με --lanes: ΧΩΡΙΣ τη γωνία της λωρίδας (για σύγκριση)")
 args = parser.parse_args()
 
 # Ρυθμίσεις του φίλτρου για κάθε δέκτη GPS. Είναι αυτό που «πιστεύει» το φίλτρο για το GPS,
@@ -85,6 +89,20 @@ STANDSTILL_WEIGHT = (GYRO_READING_NOISE / BIAS_TYPICAL) ** 2   # = 720 μετρ�
 LANE_SIGMA = 1.0    # m
 LANE_EVERY = 20     # βήματα (20 × 0,05 s = 1 s)
 LANE_JITTER = 0.1   # m
+# Είδος γραμμής και γωνία λωρίδας (10–11 Νοε 2026). Η απόσταση από τις γραμμές είναι ίδια σε κάθε λωρίδα, οπότε το
+# φίλτρο γλιστρούσε στη διπλανή. Το ΕΙΔΟΣ (διπλή / συνεχής / διακεκομμένη) λέει ποια λωρίδα είναι· η ΓΩΝΙΑ της λωρίδας
+# κρατάει την κατεύθυνση, που αλλιώς γλιστράει σιγά σιγά (μόνο γυροσκόπιο).
+# LANE_TYPE_WRONG: πόσο πιθανό θεωρεί το φίλτρο ότι η κάμερα είπε λάθος είδος. Όχι 0: ένα λάθος είδος δεν πρέπει να
+#   «σκοτώνει» τα σωστά particles.
+# LANE_ANGLE_SIGMA: πόσο εμπιστεύεται τη γωνία (μοίρες). LANE_ANGLE_OUTLIER: πιθανότητα η γωνία να είναι εντελώς λάθος
+#   (π.χ. σε στροφή ή διασταύρωση)· έτσι μια τέτοια μέτρηση απλώς δεν μετράει, αντί να χαλάει το φίλτρο.
+# Ρύθμιση: στις 4 καταγραφές με φανάρια (21 Οκτ), ψεύτικη κάμερα, 40 τρεξίματα ανά ρύθμιση. Είδος 0,2–0,3 και γωνία
+#   σ 0,75–1,5° βγήκαν σχεδόν ίδια· διαλέχτηκε 0,2 και 1,5° (το πιο «ανεκτικό», αν μια πραγματική κάμερα κάνει
+#   μεγαλύτερο λάθος από το 1° της ψεύτικης). Έλεγχος στις 4 καταγραφές με κάμερα (πραγματικός ανιχνευτής):
+#   F9P 1,08 → 0,75 m, στη σωστή λωρίδα 91% → 99% του χρόνου· M8T 5,0 → 4,9 m, 58% → 70%.
+LANE_TYPE_WRONG = 0.2
+LANE_ANGLE_SIGMA = 1.5      # μοίρες
+LANE_ANGLE_OUTLIER = 0.1
 
 np.random.seed(args.seed)   # ίδια «ζάρια» σε κάθε τρέξιμο, για να συγκρίνονται οι ρυθμίσεις δίκαια
 
@@ -138,18 +156,38 @@ def update(particles, gps_x, gps_y, gps_sigma):
 
 
 
-def lane_update(particles, measured_left, measured_right, lane_sigma):
+def lane_update(particles, measured_left, measured_right, lane_sigma, left_type=None, right_type=None, lane_angle=None):
     """Βάρη από την κάμερα λωρίδων. measured_left / measured_right: απόσταση από την αριστερή / δεξιά γραμμή (m),
     ή None αν η κάμερα δεν είδε γραμμή. Για κάθε particle: πόσο θα απείχε από τις γραμμές αν το αυτοκίνητο ήταν εκεί
-    (από τον χάρτη, lane_map.py), και βάρος exp(-d²/2σ²), όπως με το GPS. Με δύο γραμμές: το γινόμενο των δύο."""
+    (από τον χάρτη, lane_map.py), και βάρος exp(-d²/2σ²), όπως με το GPS. Με δύο γραμμές: το γινόμενο των δύο.
+    Προαιρετικά (10–11 Νοε 2026), πολλαπλασιάζονται και:
+      left_type / right_type: το είδος της γραμμής που είδε η κάμερα (ή None). Particle που ο χάρτης του λέει το ίδιο
+        είδος παίρνει 1 − LANE_TYPE_WRONG, αλλιώς LANE_TYPE_WRONG.
+      lane_angle: η γωνία της λωρίδας ως προς το αυτοκίνητο (μοίρες, ή None). Βάρος exp(-λάθος²/2σ²), ανακατεμένο με
+        μια μικρή σταθερή πιθανότητα (LANE_ANGLE_OUTLIER) για τις εντελώς λάθος μετρήσεις.
+    Τα βάρη πολλαπλασιάζονται ως άθροισμα λογαρίθμων (log_weights), για να μη γίνονται 0 από τους πολλούς παράγοντες."""
     expected_left, expected_right, _, _ = expected_line_distances(particles[:, 0], particles[:, 1], particles[:, 2])
     squared = np.zeros(N)
     if measured_left is not None:
         squared += (expected_left - measured_left) ** 2
     if measured_right is not None:
         squared += (expected_right - measured_right) ** 2
+    log_weights = -squared / (2 * lane_sigma**2)
+
+    if left_type is not None or right_type is not None or lane_angle is not None:
+        map_left, map_right, map_angle = expected_line_types_and_angle(particles[:, 0], particles[:, 1], particles[:, 2])
+        # Είδος: μόνο για την πλευρά όπου η κάμερα είδε γραμμή ΚΑΙ ξέρει το είδος της
+        for measured, seen_type, map_type in ((measured_left, left_type, map_left), (measured_right, right_type, map_right)):
+            if measured is not None and seen_type is not None:
+                log_weights += np.where(map_type == seen_type, np.log(1 - LANE_TYPE_WRONG), np.log(LANE_TYPE_WRONG))
+        if lane_angle is not None:
+            difference = np.radians(lane_angle) - map_angle
+            error = np.degrees(np.arctan2(np.sin(difference), np.cos(difference)))      # μοίρες, στο [-180, 180]
+            log_weights += np.log((1 - LANE_ANGLE_OUTLIER) * np.exp(-0.5 * (error / LANE_ANGLE_SIGMA) ** 2)
+                                  + LANE_ANGLE_OUTLIER)
+
     # Όπως στο update του GPS: σε σχέση με το particle που ταιριάζει καλύτερα, για να μη βγουν ποτέ όλα 0.
-    weights = np.exp(-(squared - np.min(squared)) / (2 * lane_sigma**2))
+    weights = np.exp(log_weights - np.max(log_weights))
     weights = weights / np.sum(weights)
     return weights
 
@@ -287,12 +325,17 @@ for i in range(len(data)):
         # Η ψεύτικη κάμερα μετράει στην αληθινή θέση (κόσμος)· ο ανιχνευτής χρησιμοποιεί μόνο το frame της εικόνας.
         frame = int(data["frame"][i]) if "frame" in data.dtype.names else i   # οι καταγραφές πριν τις 30 Οκτ δεν έχουν frame
         measured_left, measured_right = camera.measure(gt_x, gt_y, np.radians(gt_yaw), frame=frame)
+        left_type, right_type, lane_angle = camera.measure_type_and_angle(gt_x, gt_y, np.radians(gt_yaw), frame=frame)
+        if args.no_lane_type:
+            left_type = right_type = None
+        if args.no_lane_angle:
+            lane_angle = None
         lane_images += 1
         # Έχει βρει το φίλτρο την κατεύθυνσή του; (πόσο «μαζεμένες» είναι οι κατευθύνσεις των particles)
         heading_known = np.hypot(np.mean(np.cos(particles[:, 2])), np.mean(np.sin(particles[:, 2]))) >= heading_gate
         if (measured_left is not None or measured_right is not None) and heading_known:
             lane_measurements += 1
-            weights = lane_update(particles, measured_left, measured_right, lane_sigma)
+            weights = lane_update(particles, measured_left, measured_right, lane_sigma, left_type, right_type, lane_angle)
             particles, weights = resample(particles, weights)
             particles[:, 0] += np.random.normal(0, LANE_JITTER, N)
             particles[:, 1] += np.random.normal(0, LANE_JITTER, N)
@@ -327,6 +370,18 @@ gps_error = np.sqrt(diff_x**2 + diff_y**2)
 print("δέκτης:", args.receiver)
 print("φίλτρο: μέσο", round(np.mean(filter_error), 2), "m, μέγιστο", round(np.max(filter_error), 2), "m")
 print("gps: μέσο", round(np.mean(gps_error), 2), "m, μέγιστο", round(np.max(gps_error), 2), "m")
+# Σωστή λωρίδα (11 Νοε 2026): το ζητούμενο της διπλωματικής είναι «να ξέρουμε σε ποια λωρίδα είμαστε».
+# Στη θέση της ΑΛΗΘΕΙΑΣ παίρνουμε από τον χάρτη το κέντρο και την κατεύθυνση της λωρίδας. Η εκτίμηση είναι στη σωστή
+# λωρίδα αν απέχει από αυτό το κέντρο, κάθετα στον δρόμο, λιγότερο από μισό πλάτος λωρίδας (1,75 m).
+# Μετράμε μόνο εκτός διασταυρώσεων (εκεί οι λωρίδες διασταυρώνονται και δεν έχει νόημα).
+_, lane_index = nearest_lane_point(truths[:, 0], truths[:, 1])
+true_lane = LANES[lane_index]
+true_lane_yaw = np.radians(true_lane["yaw"])
+side_error = np.abs(-(estimates[:, 0] - true_lane["x"]) * np.sin(true_lane_yaw)
+                    + (estimates[:, 1] - true_lane["y"]) * np.cos(true_lane_yaw))
+outside_junctions = ~true_lane["is_junction"]
+print("σωστή λωρίδα:", round(100 * np.mean(side_error[outside_junctions] < 1.75), 1),
+      "% του χρόνου (εκτός διασταυρώσεων), πλάγιο λάθος διάμεσο", round(float(np.median(side_error[outside_junctions])), 2), "m")
 if camera is not None:
     print("κάμερα λωρίδων: χρησιμοποιήθηκε σε", round(100 * lane_measurements / lane_images), "% των εικόνων (1 τη στιγμή)")
 

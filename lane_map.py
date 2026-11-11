@@ -86,6 +86,33 @@ def expected_line_distances(x, y, yaw):
     return left, right, left_painted, right_painted
 
 
+# ─── Είδος γραμμής και γωνία λωρίδας (10–11 Νοε 2026) ───────────────────────────────────────────────────
+# Η απόσταση από τις γραμμές είναι ίδια σε κάθε λωρίδα (1,75 m αριστερά και δεξιά), άρα δεν λέει ΠΟΙΑ λωρίδα είναι.
+# Το είδος της γραμμής το λέει: στους δρόμους με 4 λωρίδες του Town10 η εσωτερική λωρίδα έχει (διπλή, διακεκομμένη)
+# και η εξωτερική (διακεκομμένη, συνεχής). Κωδικοί: 0 = άβαφη, 1 = διακεκομμένη, 2 = συνεχής, 3 = διπλή.
+LINE_BROKEN, LINE_SOLID, LINE_DOUBLE = 1, 2, 3
+_TYPE_CODE = {"NONE": 0, "Broken": LINE_BROKEN, "Solid": LINE_SOLID, "SolidSolid": LINE_DOUBLE}
+LEFT_TYPE = np.array([_TYPE_CODE.get(t, 0) for t in LANES["left_marking"]])
+RIGHT_TYPE = np.array([_TYPE_CODE.get(t, 0) for t in LANES["right_marking"]])
+
+
+def expected_line_types_and_angle(x, y, yaw):
+    """Για ένα σημείο ή πίνακες (π.χ. όλα τα particles), από τον χάρτη:
+    (είδος αριστερής γραμμής, είδος δεξιάς, γωνία της λωρίδας ως προς την κατεύθυνση του σημείου).
+    Είδος: 0 άβαφη, 1 διακεκομμένη, 2 συνεχής, 3 διπλή. Γωνία σε rad, θετική = η λωρίδα πάει προς τα δεξιά του σημείου
+    (όπως τη μετράει ο ανιχνευτής). «Αριστερά/δεξιά» όπως τα βλέπει το αυτοκίνητο: με ανάποδη φορά αλλάζουν θέση,
+    όπως στο expected_line_distances. Επιστρέφει πάντα πίνακες."""
+    x, y, yaw = np.atleast_1d(x), np.atleast_1d(y), np.atleast_1d(yaw)
+    _, index = nearest_lane_point(x, y)
+    lane_yaw = np.radians(LANES["yaw"][index])
+    diff = np.arctan2(np.sin(lane_yaw - yaw), np.cos(lane_yaw - yaw))       # κατεύθυνση λωρίδας − κατεύθυνση σημείου
+    flip = np.abs(diff) > np.pi / 2                                        # το σημείο κοιτάει ανάποδα από τη λωρίδα
+    left_type = np.where(flip, RIGHT_TYPE[index], LEFT_TYPE[index])
+    right_type = np.where(flip, LEFT_TYPE[index], RIGHT_TYPE[index])
+    angle = np.where(flip, np.arctan2(np.sin(diff + np.pi), np.cos(diff + np.pi)), diff)
+    return left_type, right_type, angle
+
+
 if __name__ == "__main__":
     print("σημεία στον χάρτη:", len(LANES))
 

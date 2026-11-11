@@ -15,7 +15,8 @@
 
 Απλοποιήσεις:
   - η απόσταση μετριέται κάθετα στον δρόμο (βλ. lane_map.expected_line_distances)
-  - δεν δίνει γωνία λωρίδας (το φίλτρο ξεκινάει μόνο με την απόσταση)
+  - η γωνία λωρίδας και το είδος της γραμμής (10–11 Νοε 2026) βγαίνουν από ξεχωριστή συνάρτηση
+    (measure_type_and_angle), με δικά τους «ζάρια», για να μην αλλάζουν οι μετρήσεις απόστασης
   - δεν «κρύβουν» αυτοκίνητα τις γραμμές: αυτό θα το έχει ο πραγματικός ανιχνευτής
 
 Δοκιμή:
@@ -24,7 +25,19 @@
 
 import numpy as np
 
-from lane_map import expected_line_distances
+from lane_map import LINE_BROKEN, LINE_DOUBLE, LINE_SOLID, expected_line_distances, expected_line_types_and_angle
+
+# ─── Είδος γραμμής και γωνία λωρίδας: ο «κόσμος» (10–11 Νοε 2026) ───────────────────────────────────────
+ANGLE_NOISE_DEG = 1.0       # λάθος που προστίθεται στη γωνία σε κάθε μέτρηση (⚠️ η πηγή για το μέγεθος θέλει έλεγχο)
+# Η ψεύτικη κάμερα μιμείται τον πραγματικό ανιχνευτή, όπως μετρήθηκε 10 Νοε 2026 (30 Οκτ 20:45 και 21:24):
+SOLID_SEEN_AS_SOLID = 0.85      # τη συνεχή τη λέει συνεχή στο 85%...
+SOLID_SEEN_AS_BROKEN = 0.08     # ...διακεκομμένη στο 8% (όταν φαίνεται μικρό κομμάτι της)· αλλιώς «δεν ξέρω»
+BROKEN_SEEN_AS_BROKEN = 0.99    # τη διακεκομμένη σχεδόν πάντα σωστά· τη διπλή πάντα
+ANGLE_AVAILABLE = 0.65          # γωνία υπάρχει στο 65% των εικόνων με γραμμή (όσο το angle_ok του ανιχνευτή)
+ANGLE_TAIL_PROB, ANGLE_TAIL_DEG = 0.10, 5.0   # 1 στις 10 γωνίες έχει και ένα μεγάλο λάθος Ν(0, 5°): η «ουρά» του ανιχνευτή
+# Ο ανιχνευτής δεν γράφει (ακόμα) αν η γραμμή είναι συνεχής ή διακεκομμένη. Το βγάζουμε από το πόσα σημεία της είδε
+# (ένα ανά σειρά εικόνας, το πολύ ~293): πολλά = συνεχής, λίγα = διακεκομμένη, ενδιάμεσα = «δεν ξέρω».
+SOLID_MIN_POINTS, BROKEN_MAX_POINTS = 230, 180
 
 
 class FakeLaneCamera:
@@ -39,6 +52,31 @@ class FakeLaneCamera:
         # Σταθερό λάθος: μία φορά για όλη τη διαδρομή, ένα για κάθε πλευρά
         self.offset_left = self.rng.uniform(-offset_max, offset_max)
         self.offset_right = self.rng.uniform(-offset_max, offset_max)
+        # Είδος και γωνία: άλλη σειρά τυχαίων αριθμών ([seed, 5]), ώστε οι μετρήσεις απόστασης να μένουν ίδιες με πριν
+        self.rng_extra = np.random.default_rng(None if seed is None else [seed, 5])
+
+    def measure_type_and_angle(self, x, y, yaw, frame=None):
+        """Είδος της αριστερής και της δεξιάς γραμμής και γωνία της λωρίδας, στην ΑΛΗΘΙΝΗ θέση, με λάθη σαν του ανιχνευτή.
+        Επιστρέφει (είδος αριστερά, είδος δεξιά, γωνία σε μοίρες). Είδος: LINE_BROKEN / LINE_SOLID / LINE_DOUBLE ή None
+        («δεν ξέρω»). Γωνία: θετική = η λωρίδα πάει προς τα δεξιά του αυτοκινήτου· None αν δεν υπάρχει."""
+        u = self.rng_extra.random(4)                         # τραβιούνται πάντα, για να μένει ίδια η σειρά
+        noise, tail = self.rng_extra.normal(0, ANGLE_NOISE_DEG), self.rng_extra.normal(0, ANGLE_TAIL_DEG)
+        left_type, right_type, angle = expected_line_types_and_angle(x, y, yaw)
+        has_line = left_type[0] != 0 or right_type[0] != 0
+        value = float(np.degrees(angle[0])) + noise + (tail if u[3] < ANGLE_TAIL_PROB else 0.0)
+        return (self._degrade(int(left_type[0]), u[0]), self._degrade(int(right_type[0]), u[1]),
+                value if (has_line and u[2] < ANGLE_AVAILABLE) else None)
+
+    @staticmethod
+    def _degrade(true_type, u):
+        """Το είδος όπως θα το έλεγε ο ανιχνευτής (u: τυχαίος αριθμός 0–1)."""
+        if true_type == LINE_SOLID:
+            if u < SOLID_SEEN_AS_SOLID:
+                return LINE_SOLID
+            return LINE_BROKEN if u < SOLID_SEEN_AS_SOLID + SOLID_SEEN_AS_BROKEN else None
+        if true_type == LINE_BROKEN:
+            return LINE_BROKEN if u < BROKEN_SEEN_AS_BROKEN else None
+        return LINE_DOUBLE if true_type == LINE_DOUBLE else None      # η άβαφη (0) δεν έχει είδος
 
     def measure(self, x, y, yaw, frame=None):
         """Μία εικόνα. x, y, yaw: η ΑΛΗΘΙΝΗ θέση και κατεύθυνση (yaw σε rad). frame: δεν χρησιμοποιείται εδώ
@@ -70,16 +108,57 @@ class DetectorLaneCamera:
         det = np.genfromtxt(lanes_path, delimiter=",", names=True)
         # frame → (αριστερά, δεξιά), με None όπου ο ανιχνευτής δεν είδε γραμμή
         self.by_frame = {}
+        self.extra_by_frame = {}     # frame → (είδος αριστερά, είδος δεξιά, γωνία αριστερά ή None, γωνία δεξιά ή None)
+        has_extra = "left_kind" in det.dtype.names          # τα CSV πριν τις 9 Νοε 2026 δεν έχουν είδος και angle_ok
+        # Από 11 Νοε 2026 ο ανιχνευτής γράφει ο ίδιος τον τύπο της γραμμής (left_type / right_type: 0 δεν ξέρω,
+        # 1 διακεκομμένη, 2 συνεχής, 3 διπλή), από τα κενά της βαφής. Στα παλιότερα CSV τον βγάζουμε από τα σημεία.
+        has_type = "left_type" in det.dtype.names
         for row in det:
             left = float(row["left_dist"]) if row["left_ok"] == 1 else None
             right = float(row["right_dist"]) if row["right_ok"] == 1 else None
             self.by_frame[int(row["frame"])] = (left, right)
+            if has_extra:
+                if has_type:
+                    left_type, right_type = int(row["left_type"]) or None, int(row["right_type"]) or None
+                else:
+                    left_type = self._line_type(int(row["left_kind"]), row["left_points"])
+                    right_type = self._line_type(int(row["right_kind"]), row["right_points"])
+                self.extra_by_frame[int(row["frame"])] = (
+                    left_type, right_type,
+                    float(row["left_angle_deg"]) if row["left_angle_ok"] == 1 else None,
+                    float(row["right_angle_deg"]) if row["right_angle_ok"] == 1 else None)
         # Ίδια «ζάρια» και ίδιο λάθος με την FakeLaneCamera
         self.rng = np.random.default_rng(None if seed is None else [seed, 2])
         self.noise_sigma = noise_sigma
         self.extra_loss = extra_loss
         self.offset_left = self.rng.uniform(-offset_max, offset_max)
         self.offset_right = self.rng.uniform(-offset_max, offset_max)
+        self.rng_extra = np.random.default_rng(None if seed is None else [seed, 5])   # για το λάθος της γωνίας
+
+    @staticmethod
+    def _line_type(kind, points):
+        """ΜΟΝΟ για τα CSV πριν τις 11 Νοε 2026 (χωρίς left_type / right_type).
+        Είδος γραμμής από το CSV του ανιχνευτή: kind 2 = διπλή· kind 1 = μία γραμμή, συνεχής ή διακεκομμένη
+        ανάλογα με το πόσα σημεία της είδε· αλλιώς None («δεν ξέρω»)."""
+        if kind == 2:
+            return LINE_DOUBLE
+        if kind == 1 and points >= SOLID_MIN_POINTS:
+            return LINE_SOLID
+        if kind == 1 and points <= BROKEN_MAX_POINTS:
+            return LINE_BROKEN
+        return None
+
+    def measure_type_and_angle(self, x, y, yaw, frame=None):
+        """Είδος των δύο γραμμών και γωνία της λωρίδας από τον ανιχνευτή, στο frame (ή στο διπλανό). x, y, yaw ΔΕΝ
+        χρησιμοποιούνται. Στη γωνία προστίθεται λάθος Ν(0, ANGLE_NOISE_DEG) ανά πλευρά· με δύο πλευρές, ο μέσος όρος τους.
+        Επιστρέφει (είδος αριστερά, είδος δεξιά, γωνία σε μοίρες ή None), όπως η FakeLaneCamera."""
+        noise = self.rng_extra.normal(0, ANGLE_NOISE_DEG, 2)     # τραβιούνται πάντα, για να μένει ίδια η σειρά
+        found = next((self.extra_by_frame[f] for f in (frame, frame + 1, frame - 1) if f in self.extra_by_frame), None)
+        if found is None:
+            return None, None, None
+        left_type, right_type, left_angle, right_angle = found
+        angles = [a + n for a, n in ((left_angle, noise[0]), (right_angle, noise[1])) if a is not None]
+        return left_type, right_type, (float(np.mean(angles)) if angles else None)
 
     def measure(self, x, y, yaw, frame=None):
         """Μία εικόνα: η μέτρηση του ανιχνευτή στο frame (ή στο διπλανό: η κάμερα βγάζει εικόνα κάθε 2ο βήμα).
