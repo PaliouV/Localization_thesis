@@ -23,6 +23,7 @@ import argparse
 import glob
 import json
 import os
+import re
 
 import numpy as np
 
@@ -185,9 +186,33 @@ def run_camera(drive, camera, n, n_debug, poses, objects, grid, mounts, cam_heig
 
 
 def load_objects():
-    """είδος → πίνακας N×2 με x, y (το κέντρο του κουτιού κάθε αντικειμένου)."""
+    """είδος → πίνακας N×2 με x, y. Το CARLA δίνει ΚΟΜΜΑΤΙΑ (στύλος, βραχίονας, κεφαλή, βάση), όχι ολόκληρα αντικείμενα:
+    κολόνες:   μόνο τα όρθια κομμάτια (ύψος ≥ 2 m, που ξεκινούν κοντά στο έδαφος). Αν το κουτί είναι φαρδύ επειδή πιάνει
+               και τον βραχίονα του φωτιστικού, ο στύλος είναι στην άκρη του κουτιού ΜΑΚΡΙΑ από την κεφαλή του φωτιστικού
+               (π.χ. BP_StreetLight_simple10: κέντρο κουτιού y 9,40, κεφαλή y 11,01, στύλος y 7,74). Αλλιώς το κέντρο.
+    φανάρια:   το κέντρο του κουτιού, όχι τα πολύ μικρά (κουμπιά πεζών).
+    πινακίδες: το κέντρο του κουτιού."""
     data = json.load(open(POLES_FILE))["objects"]
-    return {kind: np.array([[o["x"], o["y"]] for o in data if o["kind"] == kind], dtype=float).reshape(-1, 2) for kind in KINDS}
+    instance = lambda o: re.sub(r"_(SM|Poles|TrafficLight|TrafficSigns)_\d+$", "", o["name"])
+    heads = {}                                   # αντικείμενο → κεφαλές φωτιστικού (επίπεδα κομμάτια ψηλά)
+    for o in data:
+        if o["kind"] == "pole" and o["extent_z"] < 0.3 and o["z"] > 5.0:
+            heads.setdefault(instance(o), []).append((o["x"], o["y"]))
+    xy = {kind: [] for kind in KINDS}
+    for o in data:
+        centre = np.array([o["x"], o["y"]])
+        if o["kind"] == "light" and o["extent_z"] >= 0.3:
+            xy["light"].append(centre)
+        elif o["kind"] == "sign":
+            xy["sign"].append(centre)
+        elif o["kind"] == "pole" and 2 * o["extent_z"] >= 2.0 and o["z"] - o["extent_z"] <= 1.5:
+            long_, short = max(o["extent_x"], o["extent_y"]), min(o["extent_x"], o["extent_y"])
+            if long_ > 0.6 and instance(o) in heads:
+                away = centre - np.mean(heads[instance(o)], axis=0)
+                if np.hypot(*away) > 0.5:        # η κεφαλή είναι στη μία πλευρά → ο στύλος στην άλλη άκρη
+                    centre = centre + away / np.hypot(*away) * (long_ - short)
+            xy["pole"].append(centre)
+    return {kind: np.array(points, dtype=float).reshape(-1, 2) for kind, points in xy.items()}
 
 
 def main():
