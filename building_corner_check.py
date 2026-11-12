@@ -71,6 +71,12 @@ ROAD_Z = 0.0            # m: ύψος του δρόμου στον χάρτη (�
 
 BUILDING, OPEN, HIDDEN = 1, 0, 2
 
+# (Γ) Λεπτά αντικείμενα (12 Νοε 2026): πόσα βλέπει η κάμερα, για να δούμε αν αξίζουν ως σημάδια αντί για (ή μαζί με) κτήρια.
+# Δεν υπάρχει ακόμα χάρτης τους, άρα εδώ ΜΟΝΟ μετράμε πόσα φαίνονται. Όνομα: (ετικέτα, ελάχιστα px ύψος σε μια στήλη).
+# Με εστιακή 640 px: κολόνα 5 m φαίνεται 30 px στα ~105 m· φανάρι 1 m φαίνεται 10 px στα ~65 m· πινακίδα 0,6 m 8 px στα ~50 m.
+THIN_OBJECTS = {"κολόνες": (6, 30), "φανάρια": (7, 10), "πινακίδες": (8, 8)}
+THIN_MIN_WIDTH = 2      # px: πιο στενές ομάδες στηλών δεν μετράνε
+
 
 # ---------------------------------------------------------------- χάρτης: πλέγμα κάτοψης και ακτίνες
 
@@ -166,6 +172,16 @@ def edges_of(profile):
     return inside(clean), inside(hidden)
 
 
+def thin_objects(tags, tag, min_pixels):
+    """Τα αντικείμενα μιας ετικέτας σε όλη την εικόνα, ως ομάδες από διπλανές στήλες.
+    Μια στήλη μετράει αν έχει τουλάχιστον min_pixels px με αυτή την ετικέτα. Επιστρέφει τα πλάτη των ομάδων (px).
+    ⚠️ Δύο αντικείμενα που ακουμπάνε στην εικόνα μετράνε ως ένα· ένα φανάρι με οριζόντιο βραχίονα βγαίνει φαρδύ."""
+    has = np.concatenate([[False], (tags == tag).sum(axis=0) >= min_pixels, [False]])
+    change = np.flatnonzero(np.diff(has.astype(int)))
+    widths = change[1::2] - change[0::2]
+    return widths[widths >= THIN_MIN_WIDTH]
+
+
 # ---------------------------------------------------------------- αρχεία και γεωμετρία
 
 def camera_mounts():
@@ -246,6 +262,8 @@ def run_camera(drive, camera, n, n_debug, poses, grids, mounts, cam_height, say)
     stats = {name: dict(same=0, mirrored=0, compared=0, cam_only=0, map_only=0, cam_edges=0, cam_matched=0,
                         map_edges=0, map_found=0, errors=[], distances=[]) for name in grids}
     clean_per_image, hidden_per_image = [], []
+    thin_counts = {name: [] for name in THIN_OBJECTS}     # πόσα ανά εικόνα
+    thin_widths = {name: [] for name in THIN_OBJECTS}     # πλάτος κάθε αντικειμένου (px)
     for frame in chosen:
         x, y, yaw = next(poses[g] for g in (frame, frame - 1, frame + 1) if g in poses)
         cam_x = x + forward * np.cos(yaw) - right * np.sin(yaw)
@@ -256,7 +274,11 @@ def run_camera(drive, camera, n, n_debug, poses, grids, mounts, cam_height, say)
         share += np.bincount(cam, minlength=3)
         clean_per_image.append(len(cam_clean))
         hidden_per_image.append(len(cam_hidden))
-        seen = cam != HIDDEN                              # συγκρίνουμε μόνο όπου η κάμερα βλέπει κάτι
+        for name, (tag, min_pixels) in THIN_OBJECTS.items():
+            widths = thin_objects(tags, tag, min_pixels)
+            thin_counts[name].append(len(widths))
+            thin_widths[name].extend(widths)
+        seen = cam != HIDDEN                             # συγκρίνουμε μόνο όπου η κάμερα βλέπει κάτι
 
         for name, grid in grids.items():
             s = stats[name]
@@ -318,6 +340,14 @@ def run_camera(drive, camera, n, n_debug, poses, grids, mounts, cam_height, say)
             say(f"        λάθος γωνίας στις σωστές: μέσο {e.mean():+.2f}°, διάμεσο |λάθος| {np.median(np.abs(e)):.2f}°"
                 + (f"· απόσταση της άκρης: διάμεσος {np.median(d):.0f} m (25%–75%: {np.percentile(d, 25):.0f}–{np.percentile(d, 75):.0f} m)"
                    if len(d) else ""))
+    say("  (Γ) λεπτά αντικείμενα που βλέπει η κάμερα (μόνο μέτρημα, χωρίς χάρτη):")
+    for name in THIN_OBJECTS:
+        c = np.array(thin_counts[name])
+        width = f"· πλάτος διάμεσος {np.median(thin_widths[name]):.0f} px" if thin_widths[name] else ""
+        say(f"    {name}: {c.mean():.1f} ανά εικόνα· εικόνες με καμία {100 * np.mean(c == 0):.0f}%, "
+            f"με 1+ {100 * np.mean(c >= 1):.0f}%, με 2+ {100 * np.mean(c >= 2):.0f}%{width}")
+    any_thin = np.sum([thin_counts[name] for name in THIN_OBJECTS], axis=0)
+    say(f"    όλα μαζί: εικόνες με κανένα {100 * np.mean(any_thin == 0):.0f}%, με 2+ {100 * np.mean(any_thin >= 2):.0f}%")
     if debug_frames:
         say(f"  εικόνες ελέγχου: {out_dir}")
 
