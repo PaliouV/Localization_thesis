@@ -25,26 +25,25 @@
 
 import numpy as np
 
+from pf_config import read_file
+
 from lane_map import LINE_BROKEN, LINE_DOUBLE, LINE_SOLID, expected_line_distances, expected_line_types_and_angle
 
-# ─── Είδος γραμμής και γωνία λωρίδας: ο «κόσμος» (10–11 Νοε 2026) ───────────────────────────────────────
-ANGLE_NOISE_DEG = 1.0       # λάθος που προστίθεται στη γωνία σε κάθε μέτρηση (⚠️ η πηγή για το μέγεθος θέλει έλεγχο)
-# Η ψεύτικη κάμερα μιμείται τον πραγματικό ανιχνευτή, όπως μετρήθηκε 10 Νοε 2026 (30 Οκτ 20:45 και 21:24):
-SOLID_SEEN_AS_SOLID = 0.85      # τη συνεχή τη λέει συνεχή στο 85%...
-SOLID_SEEN_AS_BROKEN = 0.08     # ...διακεκομμένη στο 8% (όταν φαίνεται μικρό κομμάτι της)· αλλιώς «δεν ξέρω»
-BROKEN_SEEN_AS_BROKEN = 0.99    # τη διακεκομμένη σχεδόν πάντα σωστά· τη διπλή πάντα
-ANGLE_AVAILABLE = 0.65          # γωνία υπάρχει στο 65% των εικόνων με γραμμή (όσο το angle_ok του ανιχνευτή)
-ANGLE_TAIL_PROB, ANGLE_TAIL_DEG = 0.10, 5.0   # 1 στις 10 γωνίες έχει και ένα μεγάλο λάθος Ν(0, 5°): η «ουρά» του ανιχνευτή
+# Τα νούμερα του «κόσμου» της κάμερας (λάθος απόστασης, γωνίας, είδους γραμμής) είναι στο config.yaml (camera).
+# Εδώ διαβάζονται ως προεπιλογές· το particle_filter.py τα περνάει στις κάμερες, μαζί με ό,τι άλλαξαν τα flags.
+DEFAULTS = {name[len("camera_"):]: value for name, value in read_file()["camera"].items()}
 # Ο ανιχνευτής δεν γράφει (ακόμα) αν η γραμμή είναι συνεχής ή διακεκομμένη. Το βγάζουμε από το πόσα σημεία της είδε
 # (ένα ανά σειρά εικόνας, το πολύ ~293): πολλά = συνεχής, λίγα = διακεκομμένη, ενδιάμεσα = «δεν ξέρω».
 SOLID_MIN_POINTS, BROKEN_MAX_POINTS = 230, 180
 
 
 class FakeLaneCamera:
-    def __init__(self, seed=None, noise_sigma=0.15, offset_max=0.10, extra_loss=0.0):
+    def __init__(self, seed=None, **settings):
         """seed: τα «ζάρια» της κάμερας (δικά της, ανεξάρτητα από του GPS και του φίλτρου, με το ίδιο seed).
-        noise_sigma: λάθος σε κάθε μέτρηση (m)· offset_max: όριο του σταθερού λάθους (m);
-        extra_loss: πιθανότητα να χαθεί επιπλέον μια μέτρηση (0 = μόνο όπου δεν υπάρχει βαφή)."""
+        settings: ό,τι αλλάζει από το config.yaml (camera), χωρίς το πρόθεμα camera_. Π.χ. noise: λάθος σε κάθε
+        μέτρηση (m)· offset_max: όριο του σταθερού λάθους (m)· extra_loss: πιθανότητα να χαθεί επιπλέον μια μέτρηση."""
+        s = self.s = {**DEFAULTS, **settings}
+        noise_sigma, offset_max, extra_loss = s["noise"], s["offset_max"], s["extra_loss"]
         # [seed, 2]: άλλη σειρά τυχαίων αριθμών από το GPS (που χρησιμοποιεί σκέτο seed), αλλιώς θα είχαν το ίδιο «ζάρι»
         self.rng = np.random.default_rng(None if seed is None else [seed, 2])
         self.noise_sigma = noise_sigma
@@ -60,22 +59,21 @@ class FakeLaneCamera:
         Επιστρέφει (είδος αριστερά, είδος δεξιά, γωνία σε μοίρες). Είδος: LINE_BROKEN / LINE_SOLID / LINE_DOUBLE ή None
         («δεν ξέρω»). Γωνία: θετική = η λωρίδα πάει προς τα δεξιά του αυτοκινήτου· None αν δεν υπάρχει."""
         u = self.rng_extra.random(4)                         # τραβιούνται πάντα, για να μένει ίδια η σειρά
-        noise, tail = self.rng_extra.normal(0, ANGLE_NOISE_DEG), self.rng_extra.normal(0, ANGLE_TAIL_DEG)
+        noise, tail = self.rng_extra.normal(0, self.s["angle_noise"]), self.rng_extra.normal(0, self.s["angle_tail"])
         left_type, right_type, angle = expected_line_types_and_angle(x, y, yaw)
         has_line = left_type[0] != 0 or right_type[0] != 0
-        value = float(np.degrees(angle[0])) + noise + (tail if u[3] < ANGLE_TAIL_PROB else 0.0)
+        value = float(np.degrees(angle[0])) + noise + (tail if u[3] < self.s["angle_tail_prob"] else 0.0)
         return (self._degrade(int(left_type[0]), u[0]), self._degrade(int(right_type[0]), u[1]),
-                value if (has_line and u[2] < ANGLE_AVAILABLE) else None)
+                value if (has_line and u[2] < self.s["angle_available"]) else None)
 
-    @staticmethod
-    def _degrade(true_type, u):
+    def _degrade(self, true_type, u):
         """Το είδος όπως θα το έλεγε ο ανιχνευτής (u: τυχαίος αριθμός 0–1)."""
         if true_type == LINE_SOLID:
-            if u < SOLID_SEEN_AS_SOLID:
+            if u < self.s["solid_as_solid"]:
                 return LINE_SOLID
-            return LINE_BROKEN if u < SOLID_SEEN_AS_SOLID + SOLID_SEEN_AS_BROKEN else None
+            return LINE_BROKEN if u < self.s["solid_as_solid"] + self.s["solid_as_broken"] else None
         if true_type == LINE_BROKEN:
-            return LINE_BROKEN if u < BROKEN_SEEN_AS_BROKEN else None
+            return LINE_BROKEN if u < self.s["broken_as_broken"] else None
         return LINE_DOUBLE if true_type == LINE_DOUBLE else None      # η άβαφη (0) δεν έχει είδος
 
     def measure(self, x, y, yaw, frame=None):
@@ -103,7 +101,9 @@ class DetectorLaneCamera:
     με την FakeLaneCamera (15 cm + σταθερό έως ±10 cm + προαιρετικές επιπλέον απώλειες, απόφαση 9 Νοε 2026).
     «Δεν είδα» = ό,τι δεν είδε ο ανιχνευτής (διασταυρώσεις, αυτοκίνητα μπροστά, βέλη, διαβάσεις κ.λπ.)."""
 
-    def __init__(self, drive_csv_path, seed=None, noise_sigma=0.15, offset_max=0.10, extra_loss=0.0):
+    def __init__(self, drive_csv_path, seed=None, **settings):
+        s = self.s = {**DEFAULTS, **settings}       # όπως η FakeLaneCamera: config.yaml (camera) και ό,τι άλλαξε
+        noise_sigma, offset_max, extra_loss = s["noise"], s["offset_max"], s["extra_loss"]
         lanes_path = drive_csv_path[:-len(".csv")] + "_lanes.csv"
         det = np.genfromtxt(lanes_path, delimiter=",", names=True)
         # frame → (αριστερά, δεξιά), με None όπου ο ανιχνευτής δεν είδε γραμμή
@@ -150,9 +150,9 @@ class DetectorLaneCamera:
 
     def measure_type_and_angle(self, x, y, yaw, frame=None):
         """Είδος των δύο γραμμών και γωνία της λωρίδας από τον ανιχνευτή, στο frame (ή στο διπλανό). x, y, yaw ΔΕΝ
-        χρησιμοποιούνται. Στη γωνία προστίθεται λάθος Ν(0, ANGLE_NOISE_DEG) ανά πλευρά· με δύο πλευρές, ο μέσος όρος τους.
+        χρησιμοποιούνται. Στη γωνία προστίθεται λάθος Ν(0, camera_angle_noise) ανά πλευρά· με δύο πλευρές, ο μέσος όρος τους.
         Επιστρέφει (είδος αριστερά, είδος δεξιά, γωνία σε μοίρες ή None), όπως η FakeLaneCamera."""
-        noise = self.rng_extra.normal(0, ANGLE_NOISE_DEG, 2)     # τραβιούνται πάντα, για να μένει ίδια η σειρά
+        noise = self.rng_extra.normal(0, self.s["angle_noise"], 2)     # τραβιούνται πάντα, για να μένει ίδια η σειρά
         found = next((self.extra_by_frame[f] for f in (frame, frame + 1, frame - 1) if f in self.extra_by_frame), None)
         if found is None:
             return None, None, None

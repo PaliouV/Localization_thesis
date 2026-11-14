@@ -1,38 +1,14 @@
-import argparse
 import os
 
 import numpy as np
 from filterpy.monte_carlo import systematic_resample
-from gps_noise_v2 import GpsNoise
+from gps_noise_v2 import ZONES, GpsNoise
 from lane_camera import DetectorLaneCamera, FakeLaneCamera
+from pf_config import load_settings, print_settings
 from lane_map import LANES, expected_line_distances, expected_line_types_and_angle, nearest_lane_point
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--receiver", choices=["f9p", "m8t"], default="f9p",
-                    help="ποιος δέκτης GPS: f9p (σύγχρονος) ή m8t (παλιός)")
-parser.add_argument("--csv", default="drive_2026-10-30_20-45-55.csv",
-                    help="ποια καταγραφή (προεπιλογή: 30 Οκτ 20:45, καταγραφή ελέγχου με κάμερα)")
-parser.add_argument("--seed", type=int, default=0,
-                    help="τα «ζάρια» (του φίλτρου ΚΑΙ του θορύβου GPS): ίδιο seed → ίδιο αποτέλεσμα")
-# Για τη ρύθμιση (tune_pf.py): αν δοθούν, αντικαθιστούν τις τιμές του φίλτρου που είναι πιο κάτω.
-parser.add_argument("--gps-sigma", type=float)
-parser.add_argument("--velocity-sigma", type=float)
-parser.add_argument("--turn-rate-sigma", type=float)
-parser.add_argument("--show", action="store_true", help="ζωντανή οπτικοποίηση στον χάρτη (pf_view.py)")
-parser.add_argument("--start", type=float, default=0,
-                    help="με --show: από ποιο λεπτό της καταγραφής να αρχίσει να ζωγραφίζει")
-parser.add_argument("--lanes", action="store_true",
-                    help="χρήση της κάμερας λωρίδων (αλλιώς μόνο GPS + γυροσκόπιο + ταχύτητα, όπως πριν)")
-parser.add_argument("--lane-sigma", type=float, help="αντικαθιστά το LANE_SIGMA (πόσο εμπιστεύεται την κάμερα)")
-parser.add_argument("--lane-source", choices=["fake", "detector"], default="fake",
-                    help="με --lanes: fake = ψεύτικη κάμερα από τον χάρτη· detector = το CSV του ανιχνευτή του εργαστηρίου")
-parser.add_argument("--wheel-scale", type=float,
-                    help="σταθερό λάθος κλίμακας της ταχύτητας των τροχών (π.χ. 0.01 = +1%%)· αλλιώς τυχαίο ανά διαδρομή")
-parser.add_argument("--no-lane-type", action="store_true",
-                    help="με --lanes: ΧΩΡΙΣ το είδος της γραμμής (για σύγκριση)")
-parser.add_argument("--no-lane-angle", action="store_true",
-                    help="με --lanes: ΧΩΡΙΣ τη γωνία της λωρίδας (για σύγκριση)")
-args = parser.parse_args()
+# Ρυθμίσεις: config.yaml και από πάνω τα flags της εντολής (pf_config.py, 15 Νοε 2026).
+cfg = load_settings()
 
 # Ρυθμίσεις του φίλτρου για κάθε δέκτη GPS. Είναι αυτό που «πιστεύει» το φίλτρο για το GPS,
 # ΟΧΙ τα νούμερα του θορύβου (gps_noise_v2.py): αυτά είναι ο «πραγματικός κόσμος», που το φίλτρο δεν ξέρει.
@@ -52,17 +28,15 @@ args = parser.parse_args()
 #   M8T: 5, από 50. Δοκιμάστηκαν 5, 15, 50, με επιλογή στις 4 καταγραφές με φανάρια (21 Οκτ) και έλεγχο
 #   στις 30 Οκτ (και 21 Οκτ). Το 5 και το 15 βγήκαν κοντά, με το 5 λίγο καλύτερο, και τα δύο καθαρά καλύτερα
 #   από το 50. Ο M8T σχεδόν δεν ακούει το GPS, άρα μετράει πολύ η αρχή: μαζεμένο σύννεφο γύρω από την πρώτη μέτρηση.
-SETTINGS = {
-    "f9p": {"pos_sigma": 3, "gps_sigma": 12, "heading_gate": 0.94},     # m, m, -
-    "m8t": {"pos_sigma": 5, "gps_sigma": 200, "heading_gate": 0.985},   # m, m, -
-}
+# Οι τιμές είναι στο config.yaml (filter: f9p / m8t).
 
 # Τι «πιστεύει» το φίλτρο για την ταχύτητα και το γυροσκόπιο. Βγαίνουν από τους ΑΙΣΘΗΤΗΡΕΣ, όχι από ρύθμιση σε
 # μια διαδρομή, γι' αυτό είναι ίδια για κάθε δέκτη και κάθε χάρτη: ο πραγματικός θόρυβος (πηγές πιο κάτω,
 # στον θόρυβο του «κόσμου») επί 2, για περιθώριο ασφαλείας σε ό,τι δεν έχουμε προβλέψει.
-SAFETY = 2
-VELOCITY_SIGMA = SAFETY * 0.05                          # m/s   (wheel speed: Gao 2006)
-TURN_RATE_SIGMA = SAFETY * np.radians(0.03 * np.sqrt(20))   # rad/s (γυροσκόπιο: MTi-10, ≈ 0.0023 → 0.0046)
+# Τα νούμερα των αισθητήρων και το safety είναι στο config.yaml (sensors, filter).
+GYRO_READING_NOISE = np.radians(cfg.gyro_noise_density * np.sqrt(20))   # rad/s (θόρυβος μίας μέτρησης στα 20 Hz)
+VELOCITY_SIGMA = cfg.safety * cfg.speed_noise          # m/s   (0,05 → 0,10)
+TURN_RATE_SIGMA = cfg.safety * GYRO_READING_NOISE      # rad/s (≈ 0,0023 → 0,0046)
 
 # Εκτίμηση του bias του γυροσκοπίου από τις στάσεις (αλλαγή 6 Νοε 2026). Όταν οι τροχοί λένε 0, το αυτοκίνητο
 # δεν στρίβει, άρα ό,τι δείχνει το γυροσκόπιο είναι bias + θόρυβος. Το φίλτρο κρατάει τον μέσο όρο αυτών των
@@ -70,8 +44,7 @@ TURN_RATE_SIGMA = SAFETY * np.radians(0.03 * np.sqrt(20))   # rad/s (γυροσ�
 # Το STANDSTILL_WEIGHT βγαίνει από το datasheet του MTi-10 (σελ. 2): (θόρυβος μίας μέτρησης / τυπικό bias)².
 # Με λίγες μετρήσεις στάσης η εκτίμηση μένει κοντά στο 0. Μετά από 720 (36 s στάσης συνολικά) την εμπιστεύεται
 # κατά το μισό, και όσο μαζεύονται περισσότερες, όλο και περισσότερο.
-BIAS_TYPICAL = np.radians(18 / 3600)                     # rad/s (in-run bias stability 18 °/h)
-GYRO_READING_NOISE = np.radians(0.03 * np.sqrt(20))      # rad/s (θόρυβος μίας μέτρησης στα 20 Hz)
+BIAS_TYPICAL = np.radians(cfg.gyro_bias_stability / 3600)   # rad/s (in-run bias stability 18 °/h)
 STANDSTILL_WEIGHT = (GYRO_READING_NOISE / BIAS_TYPICAL) ** 2   # = 720 μετρήσεις
 
 # Κάμερα λωρίδων (9 Νοε 2026). Αρχικά: σ 0,4 m (Tao 2016, σ. 141) και κάθε εικόνα (10 τη στιγμή). Έτσι το φίλτρο
@@ -86,9 +59,8 @@ STANDSTILL_WEIGHT = (GYRO_READING_NOISE / BIAS_TYPICAL) ** 2   # = 720 μετρ�
 #     |μέσος όρος των e^(i·yaw)| ≥ heading_gate (0,94 ≈ 20° άπλωμα, 0,985 ≈ 10°). Αλλιώς ένα particle που κοιτάει
 #     ΑΝΑΠΟΔΑ στη διπλανή λωρίδα βλέπει τις ίδιες αποστάσεις, και ο M8T «κλείδωνε» ανάποδα από την αρχή.
 # Το πραγματικό λάθος του κόσμου (lane_camera.py) είναι 15 cm + σταθερό έως ±10 cm· το φίλτρο δεν το ξέρει.
-LANE_SIGMA = 1.0    # m
-LANE_EVERY = 20     # βήματα (20 × 0,05 s = 1 s)
-LANE_JITTER = 0.1   # m
+LANE_EVERY = cfg.lane_every
+LANE_JITTER = cfg.lane_jitter
 # Είδος γραμμής και γωνία λωρίδας (10–11 Νοε 2026). Η απόσταση από τις γραμμές είναι ίδια σε κάθε λωρίδα, οπότε το
 # φίλτρο γλιστρούσε στη διπλανή. Το ΕΙΔΟΣ (διπλή / συνεχής / διακεκομμένη) λέει ποια λωρίδα είναι· η ΓΩΝΙΑ της λωρίδας
 # κρατάει την κατεύθυνση, που αλλιώς γλιστράει σιγά σιγά (μόνο γυροσκόπιο).
@@ -100,20 +72,20 @@ LANE_JITTER = 0.1   # m
 #   σ 0,75–1,5° βγήκαν σχεδόν ίδια· διαλέχτηκε 0,2 και 1,5° (το πιο «ανεκτικό», αν μια πραγματική κάμερα κάνει
 #   μεγαλύτερο λάθος από το 1° της ψεύτικης). Έλεγχος στις 4 καταγραφές με κάμερα (πραγματικός ανιχνευτής):
 #   F9P 1,08 → 0,75 m, στη σωστή λωρίδα 91% → 99% του χρόνου· M8T 5,0 → 4,9 m, 58% → 70%.
-LANE_TYPE_WRONG = 0.2
-LANE_ANGLE_SIGMA = 1.5      # μοίρες
-LANE_ANGLE_OUTLIER = 0.1
+LANE_TYPE_WRONG = cfg.lane_type_wrong
+LANE_ANGLE_SIGMA = cfg.lane_angle_sigma      # μοίρες
+LANE_ANGLE_OUTLIER = cfg.lane_angle_outlier
 
-np.random.seed(args.seed)   # ίδια «ζάρια» σε κάθε τρέξιμο, για να συγκρίνονται οι ρυθμίσεις δίκαια
+np.random.seed(cfg.seed)   # ίδια «ζάρια» σε κάθε τρέξιμο, για να συγκρίνονται οι ρυθμίσεις δίκαια
 
 # Οι καταγραφές είναι στον φάκελο drives/ (από 9 Νοε 2026). Με --csv δίνεις μόνο το όνομα της καταγραφής·
 # αν δώσεις ολόκληρη διαδρομή αρχείου που υπάρχει, χρησιμοποιείται αυτή.
 DRIVES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drives")
-csv_path = args.csv if os.path.exists(args.csv) else os.path.join(DRIVES_DIR, args.csv)
+csv_path = cfg.csv if os.path.exists(cfg.csv) else os.path.join(DRIVES_DIR, cfg.csv)
 data = np.genfromtxt(csv_path, delimiter=",", names=True)
 
 
-N = 1000
+N = cfg.particles
 
 def create_particles(gps_x, gps_y, pos_sigma, N):
     particles = np.zeros((N, 3))
@@ -214,19 +186,11 @@ def estimate(particles):
 
 
 
-pos_sigma = SETTINGS[args.receiver]["pos_sigma"]
-velocity_sigma = VELOCITY_SIGMA
-turn_rate_sigma = TURN_RATE_SIGMA
-gps_sigma = SETTINGS[args.receiver]["gps_sigma"]
-if args.gps_sigma is not None:
-    gps_sigma = args.gps_sigma
-if args.velocity_sigma is not None:
-    velocity_sigma = args.velocity_sigma
-if args.turn_rate_sigma is not None:
-    turn_rate_sigma = args.turn_rate_sigma
-lane_sigma = LANE_SIGMA
-if args.lane_sigma is not None:
-    lane_sigma = args.lane_sigma
+pos_sigma = cfg.pos_sigma
+gps_sigma = cfg.gps_sigma
+velocity_sigma = VELOCITY_SIGMA if cfg.velocity_sigma is None else cfg.velocity_sigma
+turn_rate_sigma = TURN_RATE_SIGMA if cfg.turn_rate_sigma is None else cfg.turn_rate_sigma
+lane_sigma = cfg.lane_sigma
 duration = 0.05
 
 # Θόρυβος γυροσκοπίου: ο «κόσμος», ΟΧΙ το φίλτρο (το φίλτρο δεν τα ξέρει αυτά, έχει το δικό του turn_rate_sigma).
@@ -234,15 +198,15 @@ duration = 0.05
 #   noise density 0.03 °/s/√Hz      → τυχαίο λάθος σε κάθε μέτρηση στα 20 Hz: 0.03·√20 ≈ 0.13 °/s
 #   in-run bias stability 18 °/h    → bias, ΣΤΑΘΕΡΟ σε όλη τη διαδρομή (απλοποίηση)
 # Το αρχικό bias (0.2 °/s) θεωρούμε ότι αφαιρέθηκε με βαθμονόμηση, με το αυτοκίνητο σταματημένο πριν ξεκινήσει.
-gyro_noise_sigma = np.radians(0.03 * np.sqrt(20))   # rad/s
-gyro_bias_sigma = np.radians(18 / 3600)             # rad/s (18 μοίρες την ώρα → ανά δευτερόλεπτο)
+gyro_noise_sigma = np.radians(cfg.gyro_noise_density * np.sqrt(20))   # rad/s
+gyro_bias_sigma = np.radians(cfg.gyro_bias_stability / 3600)   # rad/s (18 μοίρες την ώρα → ανά δευτερόλεπτο)
 gyro_bias = np.random.normal(0, gyro_bias_sigma)    # μία φορά, για όλη τη διαδρομή
 
 # Θόρυβος ταχύτητας (αισθητήρες τροχών): επίσης ο «κόσμος», ΟΧΙ το φίλτρο (το φίλτρο έχει το δικό του velocity_sigma).
 # Gao, Petovello & Cannon 2006 (ION NTM), Πίνακας 2 σελ. 7: ακρίβεια wheel speed sensor 5 cm/s,
 # μετρημένη σε πραγματικό αυτοκίνητο, με καταγραφή στα 20 Hz (όπως εμείς).
 # Όταν το αυτοκίνητο στέκεται, ο τροχός δεν γυρίζει, άρα η μέτρηση είναι ακριβώς 0.
-speed_noise_sigma = 0.05    # m/s
+speed_noise_sigma = cfg.speed_noise    # m/s
 stopped_speed = 0.01        # m/s: κάτω από αυτό θεωρούμε ότι στέκεται (το CARLA τότε δίνει < 0.0001, όχι ακριβώς 0)
 # Λάθος κλίμακας (αλλαγή 9 Νοε 2026): μετρημένη = (1 + k) × αληθινή. Η ακτίνα του λάστιχου αλλάζει με τη φθορά, την
 # πίεση, το φορτίο και τη θερμοκρασία, οπότε οι τροχοί μετράνε λίγο λάθος την ταχύτητα. Το k είναι ΣΤΑΘΕΡΟ σε κάθε
@@ -250,10 +214,10 @@ stopped_speed = 0.01        # m/s: κάτω από αυτό θεωρούμε ό�
 # Πηγές για το μέγεθος (βρέθηκαν 9 Νοε, ⚠️ να ξαναελεγχθούν από εμάς): Carlson 2004 (διδακτορικό, Stanford, Σχ. 2.16
 # σ. 30: φθορά ~0,8%, −20% πίεση ~0,25%, φορτίο ~0,35%)· Stephen 2000 (Calgary, σ. 132: άλλαξε >1% μετά από ρύθμιση
 # πίεσης). Δικά του «ζάρια» ([seed, 4]). Με --wheel-scale δίνεις σταθερή τιμή (για τα πειράματα: 0, ±1%, ±2%).
-if args.wheel_scale is not None:
-    wheel_scale = args.wheel_scale
+if cfg.wheel_scale is not None:
+    wheel_scale = cfg.wheel_scale
 else:
-    wheel_scale = np.random.default_rng([args.seed, 4]).normal(0, 0.005)
+    wheel_scale = np.random.default_rng([cfg.seed, 4]).normal(0, cfg.wheel_scale_sigma)
 
 estimates = []
 truths = []
@@ -263,25 +227,28 @@ particles = None
 
 # Ο θόρυβος GPS έχει δικά του «ζάρια», με το ίδιο seed. warm_start: ρεαλιστική πρώτη μέτρηση (αλλαγή 7 Νοε 2026):
 # το αργό λάθος του GPS ξεκινάει από τη συνηθισμένη του τιμή, όχι από 0 (βλ. GpsNoise στο gps_noise_v2.py).
-receiver = GpsNoise(args.receiver, seed=args.seed, warm_start=True)
+# Με gps_zones false όλη η πόλη έχει το ίδιο επίπεδο (gps_level), χωρίς ζώνες.
+zones = ZONES if cfg.gps_zones else [dict(name="whole town", x_min=-1e9, x_max=1e9, y_min=-1e9, y_max=1e9, level=cfg.gps_level)]
+receiver = GpsNoise(cfg.receiver, seed=cfg.seed, zones=zones, warm_start=cfg.gps_warm_start)
 
 # Η κάμερα λωρίδων του «κόσμου» (lane_camera.py): μετράει στην ΑΛΗΘΙΝΗ θέση, με λάθος 15 cm + σταθερό λάθος.
 # Δικά της «ζάρια», με το ίδιο seed. 10 εικόνες τη στιγμή = κάθε 2ο βήμα της καταγραφής (20 Hz).
 # Με --lane-source detector: οι μετρήσεις του πραγματικού ανιχνευτή (drives/<καταγραφή>_lanes.csv), με το ίδιο λάθος.
 camera = None
-if args.lanes:
-    if args.lane_source == "fake":
-        camera = FakeLaneCamera(seed=args.seed)
+camera_settings = {name[len("camera_"):]: value for name, value in vars(cfg).items() if name.startswith("camera_")}
+if cfg.lanes:
+    if cfg.lane_source == "fake":
+        camera = FakeLaneCamera(seed=cfg.seed, **camera_settings)
     else:
-        camera = DetectorLaneCamera(csv_path, seed=args.seed)
-heading_gate = SETTINGS[args.receiver]["heading_gate"]
+        camera = DetectorLaneCamera(csv_path, seed=cfg.seed, **camera_settings)
+heading_gate = cfg.heading_gate
 lane_measurements = 0      # πόσες εικόνες είδαν τουλάχιστον μία γραμμή (για την εκτύπωση στο τέλος)
 lane_images = 0            # πόσες εικόνες συνολικά
 
 view = None   # το παράθυρο του --show
-if args.show:
+if cfg.show:
     from pf_view import open_view, update_view
-    view = open_view(args.receiver)
+    view = open_view(cfg.receiver)
 last_fix, last_fix_time = None, 0.0   # η τελευταία μέτρηση GPS και πότε ήρθε (για το --show)
 stopped_gyro_sum = 0.0     # άθροισμα των μετρήσεων του γυροσκοπίου όταν οι τροχοί λένε 0 (για το bias)
 stopped_gyro_count = 0     # πόσες τέτοιες μετρήσεις
@@ -326,9 +293,9 @@ for i in range(len(data)):
         frame = int(data["frame"][i]) if "frame" in data.dtype.names else i   # οι καταγραφές πριν τις 30 Οκτ δεν έχουν frame
         measured_left, measured_right = camera.measure(gt_x, gt_y, np.radians(gt_yaw), frame=frame)
         left_type, right_type, lane_angle = camera.measure_type_and_angle(gt_x, gt_y, np.radians(gt_yaw), frame=frame)
-        if args.no_lane_type:
+        if not cfg.lane_type:
             left_type = right_type = None
-        if args.no_lane_angle:
+        if not cfg.lane_angle:
             lane_angle = None
         lane_images += 1
         # Έχει βρει το φίλτρο την κατεύθυνσή του; (πόσο «μαζεμένες» είναι οι κατευθύνσεις των particles)
@@ -346,7 +313,7 @@ for i in range(len(data)):
     time = data["sim_time"][i] - data["sim_time"][0]   # s από την αρχή της καταγραφής
     if fix is not None:
         last_fix, last_fix_time = fix, time
-    if view is not None and time >= args.start * 60:
+    if view is not None and time >= cfg.start * 60:
         if not update_view(view, particles, (gt_x, gt_y), (est_x, est_y), last_fix, last_fix_time, time):
             view = None   # έκλεισες το παράθυρο: το φίλτρο συνεχίζει χωρίς ζωγραφική
 
@@ -367,7 +334,7 @@ diff_y = gps_fixes[:, 1] - gps_fixes[:, 3]
 gps_error = np.sqrt(diff_x**2 + diff_y**2)
 
 #----------print--------------------
-print("δέκτης:", args.receiver)
+print("δέκτης:", cfg.receiver)
 print("φίλτρο: μέσο", round(np.mean(filter_error), 2), "m, μέγιστο", round(np.max(filter_error), 2), "m")
 print("gps: μέσο", round(np.mean(gps_error), 2), "m, μέγιστο", round(np.max(gps_error), 2), "m")
 # Σωστή λωρίδα (11 Νοε 2026): το ζητούμενο της διπλωματικής είναι «να ξέρουμε σε ποια λωρίδα είμαστε».
@@ -384,6 +351,10 @@ print("σωστή λωρίδα:", round(100 * np.mean(side_error[outside_junctio
       "% του χρόνου (εκτός διασταυρώσεων), πλάγιο λάθος διάμεσο", round(float(np.median(side_error[outside_junctions])), 2), "m")
 if camera is not None:
     print("κάμερα λωρίδων: χρησιμοποιήθηκε σε", round(100 * lane_measurements / lane_images), "% των εικόνων (1 τη στιγμή)")
+
+
+cfg.velocity_sigma, cfg.turn_rate_sigma, cfg.wheel_scale = velocity_sigma, turn_rate_sigma, wheel_scale   # ό,τι ίσχυσε τελικά
+print_settings(cfg)
 
 
 # particles = create_particles(10, 20, 3, N)
