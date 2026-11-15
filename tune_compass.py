@@ -2,7 +2,8 @@
 Ρύθμιση και έλεγχος της πυξίδας (15 Νοε 2026): πόσο πρέπει να την εμπιστεύεται το φίλτρο (compass_sigma).
 
 Τρέχει το particle_filter.py πολλές φορές (καταγραφές × δέκτες × τιμές compass_sigma × seeds), χωρίς πυξίδα και
-με πυξίδα, και τυπώνει πίνακα. Κάθε τρέξιμο γράφεται και σε αρχείο .jsonl, για να μη χαθεί.
+με πυξίδα, και τυπώνει πίνακα. Κάθε τρέξιμο γράφεται και σε αρχείο .jsonl. Αν το αρχείο υπάρχει ήδη, συνεχίζει
+από εκεί που σταμάτησε: ό,τι έχει τρέξει δεν ξανατρέχει.
 
     python3 tune_compass.py tune              # ρύθμιση: οι 4 καταγραφές της 21 Οκτ (όπως το tune_pf.py)
     python3 tune_compass.py test              # έλεγχος: 30 Οκτ και 14 Νοε, που δεν τις είδε η ρύθμιση
@@ -14,6 +15,7 @@
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -91,10 +93,18 @@ settings = [(None, False)] + [(s, start) for s in sigmas for start in (False, Tr
 jobs = [(receiver, csv, sigma, start, seed, args.lanes)
         for receiver in ("f9p", "m8t") for sigma, start in settings for csv in CSVS[args.which] for seed in range(args.seeds)]
 out_file = f"compass_results_{args.which}_{'lanes' if args.lanes else 'nolanes'}.jsonl"
-print(f"{len(jobs)} τρεξίματα, {args.workers} ταυτόχρονα → {out_file}", flush=True)
 
+# Συνέχεια από εκεί που σταμάτησε: ό,τι υπάρχει ήδη στο αρχείο (χωρίς σφάλμα) δεν ξανατρέχει.
 rows = []
-with ThreadPoolExecutor(max_workers=args.workers) as pool, open(out_file, "w", encoding="utf-8") as f:
+if os.path.exists(out_file):
+    rows = [r for r in (json.loads(line) for line in open(out_file, encoding="utf-8") if line.strip()) if "error" not in r]
+done = {(r["receiver"], r["csv"], r["sigma"], r["start"], r["seed"], r["lanes"]) for r in rows}
+wanted = set(jobs)
+rows = [r for r in rows if (r["receiver"], r["csv"], r["sigma"], r["start"], r["seed"], r["lanes"]) in wanted]
+jobs = [job for job in jobs if job not in done]
+print(f"{len(rows)} τρεξίματα υπάρχουν ήδη, μένουν {len(jobs)}, {args.workers} ταυτόχρονα → {out_file}", flush=True)
+
+with ThreadPoolExecutor(max_workers=args.workers) as pool, open(out_file, "a", encoding="utf-8") as f:
     for k, row in enumerate(pool.map(run, jobs)):
         rows.append(row)
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
