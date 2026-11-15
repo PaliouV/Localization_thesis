@@ -9,6 +9,9 @@
 
     ~/carla-env/bin/python check_recording.py                       (η πιο πρόσφατη καταγραφή)
     ~/carla-env/bin/python check_recording.py drive_2026-10-30_10-00-00.csv
+
+Οι καταγραφές είναι στον φάκελο drives/ (από 9 Νοε 2026). Αρκεί το όνομα· ψάχνει και στον κεντρικό φάκελο.
+Οι εικόνες: φάκελος με το ίδιο όνομα με το CSV, δίπλα του (ή, για παλιές καταγραφές, στον κεντρικό φάκελο).
 """
 
 import glob
@@ -18,7 +21,15 @@ import time
 
 import numpy as np
 
-csv_path = sys.argv[1] if len(sys.argv) > 1 else sorted(glob.glob("drive_*.csv"))[-1]
+HERE = os.path.dirname(os.path.abspath(__file__))
+DRIVES_DIR = os.path.join(HERE, "drives")
+if len(sys.argv) > 1:
+    csv_path = sys.argv[1]
+    if not os.path.exists(csv_path):
+        csv_path = os.path.join(DRIVES_DIR, os.path.basename(csv_path))
+else:   # η πιο πρόσφατη, από το drives/ ή τον κεντρικό φάκελο (η ώρα είναι στο όνομα)
+    candidates = glob.glob(os.path.join(DRIVES_DIR, "drive_*.csv")) + glob.glob(os.path.join(HERE, "drive_*.csv"))
+    csv_path = sorted(candidates, key=os.path.basename)[-1]
 print("Καταγραφή:", csv_path)
 
 # ─── CSV ────────────────────────────────────────────────────────────────────
@@ -41,6 +52,8 @@ print(f"          άρα 30 λεπτά προσομοίωσης θέλουν ~{3
 
 # ─── Εικόνες ────────────────────────────────────────────────────────────────
 img_dir = csv_path[:-len(".csv")]
+if not os.path.isdir(img_dir):   # παλιές καταγραφές: οι εικόνες έμειναν στον κεντρικό φάκελο
+    img_dir = os.path.join(HERE, os.path.basename(img_dir))
 folders = sorted(glob.glob(os.path.join(img_dir, "*")))
 if not folders:
     print("\nΕικόνες: καμία (καταγραφή χωρίς --cameras)")

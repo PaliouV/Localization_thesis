@@ -7,7 +7,13 @@
 
 Τρέχει στο Linux desktop, με ανοιχτό το CARLA στο Town10HD και ΚΑΝΕΝΑ άλλο script
 (βάζει το CARLA σε synchronous mode — το επαναφέρει στο τέλος):
-    ~/carla-env/bin/python town10/lidar_mapping.py --minutes 10
+    ~/carla-env/bin/python town10/lidar_mapping.py --minutes 10                (όπως πριν: autopilot)
+    ~/carla-env/bin/python town10/lidar_mapping.py --sweep --out town10_lidar_map_sweep.npz
+
+--sweep (προσθήκη 9 Νοε 2026): ΧΩΡΙΣ οδήγηση. Το αυτοκίνητο μεταφέρεται σε ΚΑΘΕ σημείο ΚΑΘΕ λωρίδας του χάρτη
+(ανά --step m, από το map.generate_waypoints) και σε καθένα παίρνει μια πλήρη σάρωση 360°. Έτσι καλύπτονται σίγουρα
+όλοι οι δρόμοι (με το autopilot, 10 λεπτά κάλυψαν κυρίως τα εσωτερικά τετράγωνα). Χωρίς φυσική (δεν «πέφτει»).
+--out: όνομα αρχείου, για να μη γράφει πάνω στο παλιό town10_lidar_map.npz.
 
 Ctrl+C σταματάει νωρίτερα και σώζει κανονικά ό,τι έχει μαζευτεί.
 Έξοδος: town10_lidar_map.npz
@@ -35,6 +41,9 @@ POINT = np.dtype([("x", "f4"), ("y", "f4"), ("z", "f4"), ("cos", "f4"), ("obj", 
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--minutes", type=float, default=10.0, help="χρόνος οδήγησης (προσομοίωσης)")
+parser.add_argument("--sweep", action="store_true", help="τηλεμεταφορά σε όλα τα σημεία όλων των λωρίδων, χωρίς οδήγηση")
+parser.add_argument("--step", type=float, default=2.0, help="με --sweep: απόσταση ανάμεσα στα σημεία (m)")
+parser.add_argument("--out", default="town10_lidar_map.npz", help="όνομα αρχείου εξόδου (στον φάκελο town10/)")
 args = parser.parse_args()
 
 client = carla.Client("localhost", 2000)
@@ -63,8 +72,12 @@ try:
     if vehicle is None:
         raise RuntimeError("Could not spawn vehicle.")
     actors.append(vehicle)
-    vehicle.set_autopilot(True, tm.get_port())
-    tm.ignore_lights_percentage(vehicle, 100)   # χωρίς άλλη κίνηση — δεν χρειάζεται να σταματάει, καλύπτει γρηγορότερα
+    if args.sweep:
+        vehicle.set_simulate_physics(False)       # το μεταφέρουμε εμείς· χωρίς φυσική δεν πέφτει και δεν αναπηδά
+        route = [w.transform for w in world.get_map().generate_waypoints(args.step)]
+    else:
+        vehicle.set_autopilot(True, tm.get_port())
+        tm.ignore_lights_percentage(vehicle, 100)   # χωρίς άλλη κίνηση — δεν χρειάζεται να σταματάει, καλύπτει γρηγορότερα
 
     lidar_bp = lib.find("sensor.lidar.ray_cast_semantic")
     lidar_bp.set_attribute("channels", "64")
@@ -80,10 +93,16 @@ try:
     lidar.listen(measurements.put)
     spectator = world.get_spectator()
 
-    steps =int(args.minutes * 60 / DT)
-    print(f"Οδήγηση για {args.minutes} λεπτά προσομοίωσης ({steps} βήματα). Ctrl+C για νωρίτερο τέλος.")
+    if args.sweep:
+        steps = len(route)
+        print(f"Σάρωση σε {steps} σημεία λωρίδων (ανά {args.step} m). Ctrl+C για νωρίτερο τέλος.")
+    else:
+        steps = int(args.minutes * 60 / DT)
+        print(f"Οδήγηση για {args.minutes} λεπτά προσομοίωσης ({steps} βήματα). Ctrl+C για νωρίτερο τέλος.")
 
     for step in range(steps):
+        if args.sweep:
+            vehicle.set_transform(route[step])    # η σάρωση μετά το tick είναι από αυτή τη θέση (m.transform)
         world.tick()
         m = measurements.get(timeout=5.0)
 
@@ -97,7 +116,7 @@ try:
             keys = np.floor(world_xyz / VOXEL).astype(np.int64)
             pending.append(np.column_stack([keys, pts["tag"], pts["obj"]]))
 
-        if step % 10 == 0:
+        if args.sweep or step % 10 == 0:
             loc = vehicle.get_location()
             traj.append((loc.x, loc.y))
             spectator.set_transform(carla.Transform(loc + carla.Location(z=70), carla.Rotation(pitch=-90)))
@@ -122,10 +141,10 @@ if pending:
     _, first = np.unique(everything[:, :4], axis=0, return_index=True)
     kept = everything[first]
 
-np.savez_compressed(os.path.join(HERE, "town10_lidar_map.npz"),
+np.savez_compressed(os.path.join(HERE, args.out),
                     points=((kept[:, :3] + 0.5) * VOXEL).astype(np.float32),
                     tag=kept[:, 3].astype(np.uint8),
                     obj=kept[:, 4].astype(np.uint32),
                     traj=np.array(traj, dtype=np.float32))
-size_mb = os.path.getsize(os.path.join(HERE, "town10_lidar_map.npz")) / 1e6
-print(f"Αποθηκεύτηκε: town10_lidar_map.npz — {len(kept)} voxels, {size_mb:.1f} MB")
+size_mb = os.path.getsize(os.path.join(HERE, args.out)) / 1e6
+print(f"Αποθηκεύτηκε: {args.out} — {len(kept)} voxels, {size_mb:.1f} MB")

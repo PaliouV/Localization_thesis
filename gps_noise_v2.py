@@ -11,6 +11,8 @@
     noise = GpsNoise("f9p", seed=1)
     fix = noise.step(x, y, yaw_deg, speed)   # (x_gps, y_gps) ή None όταν δεν υπάρχει θέση
 
+    noise = GpsNoise("f9p", seed=1, warm_start=True)   # ρεαλιστική πρώτη μέτρηση (βλ. GpsNoise)
+
 Τα νούμερα (sigma, tau κ.λπ.) βγαίνουν από τη ρύθμιση: calibrate_gps_noise_v2.py.
 ΠΑΡΑΔΟΧΕΣ σημειώνονται με αυτή τη λέξη.
 """
@@ -201,7 +203,25 @@ def motion_state(speed, previous):
 
 
 class GpsNoise:
-    def __init__(self, receiver, seed=None, zones=ZONES, dt=1.0):
+    """
+    warm_start (προσθήκη 7 Νοε 2026): χωρίς αυτό, το αργό bias ξεκινάει από 0, άρα η ΠΡΩΤΗ μέτρηση είναι σχεδόν
+    τέλεια (F9P 0,2–0,3 m, M8T 0,5–2,5 m), ενώ ένας πραγματικός δέκτης έχει από την αρχή το συνηθισμένο του λάθος.
+    Με warm_start=True, στην πρώτη κλήση του step() «τρέχουμε» πρώτα το μοντέλο για 3 ώρες στο σημείο εκκίνησης
+    (ίδια θέση, κατεύθυνση και ταχύτητα), σε ΧΩΡΙΣΤΟ αντίγραφο με δικά του ζάρια (seed + 777), και κρατάμε το bias
+    και την κατάσταση (στάση / κίνηση) που βγαίνουν: σαν ο δέκτης να ήταν ήδη ανοιχτός ώρα. Οι υπόλοιπες μετρήσεις
+    χρησιμοποιούν τα ίδια ζάρια με πριν, άρα αλλάζει μόνο το αρχικό bias, που μετά σβήνει σιγά σιγά.
+    3 ώρες: αρκετές για να φτάσει το bias τη συνηθισμένη του τιμή (το μεγαλύτερο tau είναι 3600 s, σε στάση).
+    ΠΑΡΑΔΟΧΗ: ζεσταίνεται μόνο το bias (μαζί με τα σκαλοπάτια του M8T). Η καθυστέρηση του M8T ξεκινάει ακόμα από
+    την αληθινή θέση, άρα η αρχή του M8T μένει λίγο αισιόδοξη.
+    Προεπιλογή False, για να μην αλλάξει η ρύθμιση (calibrate_gps_noise_v2.py) ούτε άλλα scripts.
+    """
+    WARM_SECONDS = 3 * 3600
+
+    def __init__(self, receiver, seed=None, zones=ZONES, dt=1.0, warm_start=False):
+        self.receiver = receiver
+        self.seed = seed
+        self.warm_start = warm_start
+        self.warmed = False
         self.profile = RECEIVERS[receiver]
         self.state = "stopped"
         self.rng = np.random.default_rng(seed)
@@ -218,6 +238,15 @@ class GpsNoise:
 
         Επιστρέφει (x_gps, y_gps), ή None όταν ο δέκτης δεν δίνει θέση.
         """
+        if self.warm_start and not self.warmed:
+            self.warmed = True
+            warm_seed = None if self.seed is None else self.seed + 777
+            warm = GpsNoise(self.receiver, seed=warm_seed, zones=self.zones, dt=self.dt)
+            for _ in range(int(self.WARM_SECONDS / self.dt)):
+                warm.step(x, y, yaw_deg, speed)
+            self.bias = warm.bias.copy()
+            self.state = warm.state
+
         self.state = motion_state(speed, self.state)
         level = zone_level(x, y, self.zones)
 
