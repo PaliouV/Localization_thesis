@@ -18,7 +18,7 @@ import yaml
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
 RECEIVERS = ["f9p", "m8t"]
 CHOICES = {"receiver": RECEIVERS, "lane_source": ["fake", "detector"], "gps_level": ["MILD", "MODERATE", "STRONG"]}
-WHOLE_NUMBERS = {"seed", "particles", "lane_every"}
+WHOLE_NUMBERS = {"seed", "particles", "lane_every", "compass_every"}
 HELP = {"csv": "ποια καταγραφή (όνομα αρχείου στον φάκελο drives/)", "seed": "τα «ζάρια» του φίλτρου και του θορύβου"}
 
 

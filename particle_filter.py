@@ -5,6 +5,7 @@ from filterpy.monte_carlo import systematic_resample
 from gps_noise_v2 import ZONES, GpsNoise
 from lane_camera import DetectorLaneCamera, FakeLaneCamera
 from pf_config import load_settings, print_settings
+from compass_noise import CompassNoise
 from lane_map import LANES, expected_line_distances, expected_line_types_and_angle, nearest_lane_point
 
 # Ρυθμίσεις: config.yaml και από πάνω τα flags της εντολής (pf_config.py, 15 Νοε 2026).
@@ -87,12 +88,16 @@ data = np.genfromtxt(csv_path, delimiter=",", names=True)
 
 N = cfg.particles
 
-def create_particles(gps_x, gps_y, pos_sigma, N):
+def create_particles(gps_x, gps_y, pos_sigma, N, compass_yaw=None, compass_sigma=None):
     particles = np.zeros((N, 3))
     xs = np.random.normal(gps_x, pos_sigma, N)
     ys = np.random.normal(gps_y, pos_sigma, N)
-    # Χωρίς πυξίδα: κάθε κατεύθυνση εξίσου πιθανή. Το φίλτρο βρίσκει τη σωστή όταν το αυτοκίνητο κινηθεί.
-    yaws = np.random.uniform(0, 2 * np.pi, N)   # rad
+    if compass_yaw is None:
+        # Χωρίς πυξίδα: κάθε κατεύθυνση εξίσου πιθανή. Το φίλτρο βρίσκει τη σωστή όταν το αυτοκίνητο κινηθεί.
+        yaws = np.random.uniform(0, 2 * np.pi, N)   # rad
+    else:
+        # Με --compass-start: γύρω από την ένδειξη της πυξίδας, με άπλωμα όσο την εμπιστεύεται το φίλτρο.
+        yaws = np.random.normal(compass_yaw, compass_sigma, N)   # rad
 
     particles[:, 0] = xs
     particles[:,1] = ys
@@ -126,6 +131,14 @@ def update(particles, gps_x, gps_y, gps_sigma):
     weights = weights/np.sum(weights)
     return weights
 
+
+
+def compass_update(particles, measured_yaw, compass_sigma):
+    # Πυξίδα (15 Νοε 2026): βάρος ανάλογα με το πόσο απέχει η κατεύθυνση του particle από την ένδειξη (rad).
+    # Η διαφορά γωνιών «τυλίγεται» στο −180°…+180° (το 359° απέχει 2° από το 1°, όχι 358°).
+    diff = np.arctan2(np.sin(particles[:, 2] - measured_yaw), np.cos(particles[:, 2] - measured_yaw))
+    weights = np.exp(-(diff**2 - np.min(diff**2)) / (2 * compass_sigma**2))   # ίδιο κόλπο με το update του GPS
+    return weights / np.sum(weights)
 
 
 def lane_update(particles, measured_left, measured_right, lane_sigma, left_type=None, right_type=None, lane_angle=None):
@@ -231,6 +244,14 @@ particles = None
 zones = ZONES if cfg.gps_zones else [dict(name="whole town", x_min=-1e9, x_max=1e9, y_min=-1e9, y_max=1e9, level=cfg.gps_level)]
 receiver = GpsNoise(cfg.receiver, seed=cfg.seed, zones=zones, warm_start=cfg.gps_warm_start)
 
+# Η πυξίδα του «κόσμου» (compass_noise.py): αργό λάθος, ίδιο σε όλη την πόλη (δεν ακολουθεί τις ζώνες του GPS).
+# Δικά της «ζάρια» ([seed, 5]). Το φίλτρο ξέρει μόνο το compass_sigma του, όχι το λάθος που έβγαλαν τα ζάρια.
+compass_world = None
+compass_sigma = np.radians(cfg.compass_sigma)   # rad
+if cfg.compass:
+    compass_world = CompassNoise(seed=[cfg.seed, 5], sigma=cfg.compass_noise_sigma, tau=cfg.compass_noise_tau)
+compass_errors = []        # το λάθος της πυξίδας σε κάθε μέτρηση (για την εκτύπωση στο τέλος)
+
 # Η κάμερα λωρίδων του «κόσμου» (lane_camera.py): μετράει στην ΑΛΗΘΙΝΗ θέση, με λάθος 15 cm + σταθερό λάθος.
 # Δικά της «ζάρια», με το ίδιο seed. 10 εικόνες τη στιγμή = κάθε 2ο βήμα της καταγραφής (20 Hz).
 # Με --lane-source detector: οι μετρήσεις του πραγματικού ανιχνευτή (drives/<καταγραφή>_lanes.csv), με το ίδιο λάθος.
@@ -279,14 +300,27 @@ for i in range(len(data)):
     estimated_gyro_bias = stopped_gyro_sum / (stopped_gyro_count + STANDSTILL_WEIGHT)
     corrected_turn_rate = turn_rate - estimated_gyro_bias
 
+    # Πυξίδα: 1 μέτρηση το δευτερόλεπτο. Στο CARLA compass − 90° = αληθινό yaw (ελεγμένο στις καταγραφές)·
+    # ο «κόσμος» της προσθέτει το αργό λάθος του.
+    measured_yaw = None
+    if compass_world is not None and i % cfg.compass_every == 0:
+        measured_yaw = compass_world.step(data["compass"][i] - np.pi / 2)
+        compass_errors.append(compass_world.error)
+
     if particles is None:
         if fix is not None:
-            particles = create_particles(fix[0], fix[1], pos_sigma, N)
+            if cfg.compass_start and measured_yaw is not None:
+                particles = create_particles(fix[0], fix[1], pos_sigma, N, measured_yaw, compass_sigma)
+            else:
+                particles = create_particles(fix[0], fix[1], pos_sigma, N)
         continue
     particles = predict(particles, measured_velocity, duration, velocity_sigma, corrected_turn_rate, turn_rate_sigma)
     if fix is not None:
         gps_fixes.append((fix[0], fix[1], gt_x, gt_y))
         weights = update(particles, fix[0], fix[1], gps_sigma)
+        particles, weights = resample(particles, weights)
+    if measured_yaw is not None:
+        weights = compass_update(particles, measured_yaw, compass_sigma)
         particles, weights = resample(particles, weights)
     if camera is not None and i % LANE_EVERY == 0:
         # Η ψεύτικη κάμερα μετράει στην αληθινή θέση (κόσμος)· ο ανιχνευτής χρησιμοποιεί μόνο το frame της εικόνας.
@@ -337,6 +371,13 @@ gps_error = np.sqrt(diff_x**2 + diff_y**2)
 print("δέκτης:", cfg.receiver)
 print("φίλτρο: μέσο", round(np.mean(filter_error), 2), "m, μέγιστο", round(np.max(filter_error), 2), "m")
 print("gps: μέσο", round(np.mean(gps_error), 2), "m, μέγιστο", round(np.max(gps_error), 2), "m")
+# Λάθος κατεύθυνσης του φίλτρου (15 Νοε 2026): εκτίμηση − αλήθεια, τυλιγμένο στο −180°…+180°.
+heading_error = np.abs(np.degrees(np.arctan2(np.sin(estimates[:, 2] - truths[:, 2]), np.cos(estimates[:, 2] - truths[:, 2]))))
+print("κατεύθυνση: διάμεσο λάθος", round(float(np.median(heading_error)), 1), "°, στο 95% του χρόνου κάτω από",
+      round(float(np.percentile(heading_error, 95)), 1), "°")
+if compass_world is not None:
+    print("πυξίδα: τυπικό λάθος", round(float(np.degrees(np.sqrt(np.mean(np.square(compass_errors))))), 1),
+          "°, μέγιστο", round(float(np.degrees(np.max(np.abs(compass_errors)))), 1), "°")
 # Σωστή λωρίδα (11 Νοε 2026): το ζητούμενο της διπλωματικής είναι «να ξέρουμε σε ποια λωρίδα είμαστε».
 # Στη θέση της ΑΛΗΘΕΙΑΣ παίρνουμε από τον χάρτη το κέντρο και την κατεύθυνση της λωρίδας. Η εκτίμηση είναι στη σωστή
 # λωρίδα αν απέχει από αυτό το κέντρο, κάθετα στον δρόμο, λιγότερο από μισό πλάτος λωρίδας (1,75 m).
