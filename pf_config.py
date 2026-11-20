@@ -46,7 +46,7 @@ def load_settings(argv=None):
     """Οι τελικές ρυθμίσεις: config.yaml και από πάνω τα flags. Επιστρέφει αντικείμενο με μία ιδιότητα ανά ρύθμιση."""
     config = read_file()
     settings = flat(config)
-    per_receiver = sorted(config["filter"][RECEIVERS[0]])        # pos_sigma, gps_sigma, heading_gate
+    per_receiver = sorted(config["filter"][RECEIVERS[0]])        # pos_sigma, gps_sigma, heading_gate, lane_jitter
 
     parser = argparse.ArgumentParser(description="Particle filter. Οι προεπιλογές είναι στο config.yaml.")
     for name, value in settings.items():
